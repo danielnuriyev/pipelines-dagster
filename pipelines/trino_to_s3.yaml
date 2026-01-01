@@ -1,5 +1,5 @@
-# Trino to S3 pipeline configuration
-# Runs a SELECT query and exports results to S3 as CSV
+# Pipeline type determines which executor to use
+type: trino_to_s3
 
 # Trino connection
 host: trino-6f3317f2-trino.trino.svc.cluster.local
@@ -14,5 +14,5 @@ s3_endpoint: http://minio-498506da.trino.svc.cluster.local:9000
 s3_bucket: warehouse
 s3_key: exports/trino_export.csv
 s3_access_key: admin
-# s3_secret_key should be provided via environment variable S3_SECRET_KEY
+# s3_secret_key is provided via environment variable S3_SECRET_KEY
 
