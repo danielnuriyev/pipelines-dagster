@@ -15,7 +15,8 @@ This repository contains user code deployments for [Dagster](https://dagster.io/
 │  │  (pulumi-dagster)│  │  ┌────────────────────────┐  │ │
 │  │  ├─ Webserver    │◄─┼──│  pipelines-dagster     │  │ │
 │  │  ├─ Daemon       │  │  │  ├─ test_a_trino_...   │  │ │
-│  │  └─ PostgreSQL   │  │  │  └─ test_b_trino_...   │  │ │
+│  │  └─ PostgreSQL   │  │  │  ├─ test_b_trino_...   │  │ │
+│  │                   │  │  │  └─ trino_to_s3       │  │ │
 │  └──────────────────┘  │  └────────────────────────┘  │ │
 │                        └──────────────────────────────┘ │
 └─────────────────────────────────────────────────────────┘
@@ -32,6 +33,28 @@ uv sync --extra dev
 
 # Install pre-commit hooks
 uv run pre-commit install
+```
+
+## Project Structure
+
+```
+pipelines-dagster/
+├── src/
+│   └── pipelines_dagster/
+│       ├── __init__.py
+│       └── definitions.py      # Dagster jobs, ops, sensors
+├── pipelines/
+│   ├── test_a_trino_insert_select.yaml
+│   ├── test_b_trino_insert_select.yaml
+│   └── trino_to_s3.yaml
+├── tests/
+│   └── integration/
+│       └── test_pipeline_chain.py
+├── Dockerfile
+├── pyproject.toml
+├── .pre-commit-config.yaml
+├── .yamllint.yaml
+└── README.md
 ```
 
 ## Local Development
@@ -127,27 +150,7 @@ uv run pytest tests/integration/ -v -s -m integration
 | `TRINO_PORT` | `8080` | Trino port |
 | `TRINO_CATALOG` | `lakehouse` | Trino catalog |
 | `TRINO_SCHEMA` | `test` | Trino schema |
-
-## Project Structure
-
-```
-pipelines-dagster/
-├── src/
-│   └── pipelines_dagster/
-│       ├── __init__.py
-│       └── definitions.py      # Dagster jobs, ops, sensors
-├── pipelines/
-│   ├── test_a_trino_insert_select.yaml
-│   └── test_b_trino_insert_select.yaml
-├── tests/
-│   └── integration/
-│       └── test_pipeline_chain.py
-├── Dockerfile
-├── pyproject.toml
-├── .pre-commit-config.yaml
-├── .yamllint.yaml
-└── README.md
-```
+| `S3_SECRET_KEY` | (none) | S3/MinIO secret key for `trino_to_s3` pipeline |
 
 ## Related Repositories
 
