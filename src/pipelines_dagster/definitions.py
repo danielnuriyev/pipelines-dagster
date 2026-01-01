@@ -7,9 +7,11 @@ import yaml
 from dagster import (
     Config,
     DagsterRunStatus,
+    DefaultScheduleStatus,
     Definitions,
     OpExecutionContext,
     RunRequest,
+    ScheduleDefinition,
     job,
     op,
     run_status_sensor,
@@ -87,6 +89,7 @@ def generate_definitions_for_workspace(workspace_name: str) -> Definitions:
     ops = {}
     jobs = {}
     sensors = []
+    schedules = []
 
     # First pass: create all ops and jobs
     for job_name, config in configs.items():
@@ -132,7 +135,25 @@ def generate_definitions_for_workspace(workspace_name: str) -> Definitions:
 
             sensors.append(sensor)
 
+    # Third pass: create schedules
+    for job_name, config in configs.items():
+        schedule_cron = config.get("schedule")
+        if not schedule_cron:
+            continue
+
+        if job_name not in jobs:
+            continue
+
+        schedule = ScheduleDefinition(
+            name=f"{job_name}_schedule",
+            job=jobs[job_name],
+            cron_schedule=schedule_cron,
+            default_status=DefaultScheduleStatus.RUNNING,
+        )
+        schedules.append(schedule)
+
     return Definitions(
         jobs=list(jobs.values()),
         sensors=sensors,
+        schedules=schedules,
     )

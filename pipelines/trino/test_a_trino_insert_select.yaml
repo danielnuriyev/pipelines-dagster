@@ -12,3 +12,6 @@ target_catalog: lakehouse
 target_schema: test
 target_table: test_b
 
+# Schedule (cron expression) - runs every minute
+schedule: "* * * * *"
+
