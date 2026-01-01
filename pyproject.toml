@@ -9,6 +9,17 @@ dependencies = [
     "dagster-webserver>=1.9.0",
     "dagster-postgres>=0.25.0",
     "trino>=0.330.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.8.0",
+    "yamllint>=1.35.0",
+    "pre-commit>=4.0.0",
+    "pytest>=8.0.0",
+    "requests>=2.32.0",
+    "trino>=0.330.0",
 ]
 
 [build-system]
@@ -16,4 +27,29 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "UP",   # pyupgrade
+]
+ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: marks tests as integration tests (require running Dagster)",
+]
+testpaths = ["tests"]

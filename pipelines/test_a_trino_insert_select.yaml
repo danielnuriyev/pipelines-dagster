@@ -1,0 +1,8 @@
+host: trino-6f3317f2-trino.trino.svc.cluster.local
+port: 8080
+user: dagster
+select_query: SELECT * FROM lakehouse.test.test_a
+target_catalog: lakehouse
+target_schema: test
+target_table: test_b
+

@@ -4,7 +4,8 @@ WORKDIR /app
 
 # Copy project files
 COPY pyproject.toml .
-COPY pipelines_dagster/ pipelines_dagster/
+COPY src/ src/
+COPY pipelines/ pipelines/
 
 # Install the package with uv
 RUN uv pip install --system --no-cache .
