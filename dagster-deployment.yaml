@@ -1,0 +1,25 @@
+# Dagster user code deployment configuration
+# This file defines how this project is deployed to Kubernetes via Helm
+
+image:
+  repository: pipelines-dagster
+  tag: latest
+  pullPolicy: IfNotPresent
+
+deployments:
+  - name: trino
+    module: pipelines_dagster.trino_defs
+    port: 4000
+    env:
+      PIPELINES_CONFIG_DIR: /app/pipelines
+
+  - name: s3
+    module: pipelines_dagster.s3_defs
+    port: 4000
+    env:
+      PIPELINES_CONFIG_DIR: /app/pipelines
+
+# Environment variables that require secrets (injected by Pulumi)
+secrets:
+  - S3_SECRET_KEY
+
