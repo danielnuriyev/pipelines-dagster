@@ -10,7 +10,9 @@ from dagster import (
     AutoMaterializePolicy,
     DefaultScheduleStatus,
     Definitions,
-    GraphOut,
+    DynamicIn,
+    DynamicOut,
+    DynamicOutput,
     In,
     OpExecutionContext,
     Out,
@@ -23,7 +25,11 @@ from dagster import (
 
 from pipelines_dagster.ops.s3_to_trino import s3_to_trino_op
 from pipelines_dagster.ops.trino_insert_select import trino_insert_select_op
-from pipelines_dagster.ops.trino_pandas_etl import trino_extract_op, trino_load_op
+from pipelines_dagster.ops.trino_pandas_etl import (
+    trino_extract_batch_generator,
+    trino_extract_op,
+    trino_load_op,
+)
 from pipelines_dagster.ops.trino_to_s3 import trino_to_s3_op
 
 # Base directory containing pipeline YAML configurations
@@ -51,31 +57,38 @@ def load_pipeline_configs_from_dir(directory: Path) -> dict[str, dict]:
     return configs
 
 
-def create_op_for_step(step_name: str, executor_func: Callable, step_config: dict, job_name: str):
+def create_op_for_step(
+    step_name: str,
+    executor_func: Callable,
+    step_config: dict,
+    job_name: str,
+    dynamic_output: bool = False,
+    dynamic_input: bool = False,
+):
     """Create an op for a single step based on YAML configuration."""
     has_inputs = step_config.get("inputs") is not None and len(step_config.get("inputs", [])) > 0
-    has_outputs = step_config.get("outputs") is not None and len(step_config.get("outputs", [])) > 0
     step_cfg = step_config.get("config", {})
 
-    if has_inputs and has_outputs:
-        @op(name=f"{job_name}_{step_name}", ins={"data": In()}, out=Out())
-        def step_op(context: OpExecutionContext, data):
-            return executor_func(context, step_cfg, data)
+    if dynamic_output:
+        @op(name=f"{job_name}_{step_name}", out=DynamicOut())
+        def step_op(context: OpExecutionContext):
+            for mapping_key, payload in executor_func(context, step_cfg):
+                yield DynamicOutput(payload, mapping_key=str(mapping_key))
 
-    elif has_inputs and not has_outputs:
-        @op(name=f"{job_name}_{step_name}", ins={"data": In()})
+        return step_op
+
+    if has_inputs:
+        ins = {"data": DynamicIn() if dynamic_input else In()}
+
+        @op(name=f"{job_name}_{step_name}", ins=ins)
         def step_op(context: OpExecutionContext, data):
             executor_func(context, step_cfg, data)
 
-    elif not has_inputs and has_outputs:
-        @op(name=f"{job_name}_{step_name}", out=Out())
-        def step_op(context: OpExecutionContext):
-            return executor_func(context, step_cfg)
+        return step_op
 
-    else:
-        @op(name=f"{job_name}_{step_name}")
-        def step_op(context: OpExecutionContext):
-            executor_func(context, step_cfg)
+    @op(name=f"{job_name}_{step_name}")
+    def step_op(context: OpExecutionContext):
+        executor_func(context, step_cfg)
 
     return step_op
 
@@ -85,47 +98,53 @@ def make_graph_asset_from_steps(
 ):
     """Create an asset backed by a graph that shows individual ops."""
 
-    # Create ops for each step
-    step_ops_list = []
-    for i, step in enumerate(steps):
-        executor_name = step.get("executor")
-        step_name = step.get("name", f"step_{i}")
+    if len(steps) != 2:
+        raise ValueError(
+            f"Unsupported pipeline pattern for {job_name}. Currently only supports 2-op patterns with extract+load."
+        )
 
-        executor_func = EXECUTOR_FUNCTIONS.get(executor_name)
-        if not executor_func:
-            raise ValueError(f"Unknown executor: {executor_name}")
+    extract_step = steps[0]
+    load_step = steps[1]
 
-        step_op = create_op_for_step(step_name, executor_func, step, job_name)
-        has_inputs = step.get("inputs") is not None and len(step.get("inputs", [])) > 0
-        has_outputs = step.get("outputs") is not None and len(step.get("outputs", [])) > 0
-        step_ops_list.append((step_name, step_op, has_inputs, has_outputs))
+    extract_executor = EXECUTOR_FUNCTIONS.get(extract_step.get("executor"))
+    load_executor = EXECUTOR_FUNCTIONS.get(load_step.get("executor"))
 
-    # Create the appropriate graph based on the step pattern
-    if len(step_ops_list) == 2:
-        step1_name, step1_op, step1_in, step1_out = step_ops_list[0]
-        step2_name, step2_op, step2_in, step2_out = step_ops_list[1]
+    if extract_executor is None or load_executor is None:
+        raise ValueError(f"Unknown executor in steps for job: {job_name}")
 
-        if not step1_in and step1_out and step2_in and not step2_out:
-            # Pattern: first op has output, second op takes input (like extract+load)
-            # Create a graph
-            @graph(name=f"{job_name}_graph")
-            def execution_graph():
-                data = step1_op()
-                step2_op(data=data)
+    is_batched = extract_step.get("config", {}).get("batch_size") is not None
 
-            # Wrap the graph in an asset
-            @asset(
-                key=asset_key,
-                non_argument_deps=dep_keys if dep_keys else None,
-                auto_materialize_policy=AutoMaterializePolicy.eager(),
-            )
-            def graph_backed_asset(context: OpExecutionContext):
-                return execution_graph()
+    extract_op = create_op_for_step(
+        step_name=extract_step.get("name", "extract"),
+        executor_func=trino_extract_batch_generator if is_batched else extract_executor,
+        step_config=extract_step,
+        job_name=job_name,
+        dynamic_output=is_batched,
+    )
 
-            return graph_backed_asset
+    load_op = create_op_for_step(
+        step_name=load_step.get("name", "load"),
+        executor_func=load_executor,
+        step_config=load_step,
+        job_name=job_name,
+        dynamic_input=is_batched,
+    )
 
-    # Single op or other multi-op patterns - not yet supported
-    raise ValueError(f"Unsupported pipeline pattern for {job_name}. Currently only supports 2-op patterns with extract+load.")
+    @graph(name=f"{job_name}_graph")
+    def execution_graph():
+        data = extract_op()
+        step_result = load_op(data=data)
+        return step_result
+
+    @asset(
+        key=asset_key,
+        non_argument_deps=dep_keys if dep_keys else None,
+        auto_materialize_policy=AutoMaterializePolicy.eager(),
+    )
+    def graph_backed_asset(context: OpExecutionContext):
+        return execution_graph()
+
+    return graph_backed_asset
 
 
 def make_single_op_asset(

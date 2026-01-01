@@ -14,6 +14,8 @@ steps:
       port: 8080
       user: dagster
       select_query: SELECT * FROM lakehouse.test.test_a
+      batch_size: 10
+      pk: id
 
   - name: load
     executor: trino_load

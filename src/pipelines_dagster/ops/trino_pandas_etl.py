@@ -37,6 +37,61 @@ def trino_extract_op(context: OpExecutionContext, config: dict) -> pd.DataFrame:
     return df
 
 
+def trino_extract_batch_generator(context: OpExecutionContext, config: dict):
+    """Generate DataFrames for each batch."""
+    batch_size = config.get("batch_size")
+    pk_column = config.get("pk")
+    select_query = config["select_query"]
+
+    if batch_size is None or pk_column is None:
+        raise ValueError("batch_size and pk must be provided for batched extract")
+
+    conn = trino.dbapi.connect(
+        host=config["host"],
+        port=config["port"],
+        user=config["user"],
+    )
+    cursor = conn.cursor()
+
+    cursor.execute(
+        f"""
+        SELECT MIN({pk_column}), MAX({pk_column})
+        FROM ({select_query}) AS base
+        """
+    )
+    bounds = cursor.fetchone()
+    if bounds is None or bounds[0] is None or bounds[1] is None:
+        cursor.close()
+        conn.close()
+        return
+
+    min_pk, max_pk = bounds
+    cursor.close()
+
+    current = min_pk
+    while current <= max_pk:
+        upper = current + batch_size
+        batch_query = f"""
+            SELECT *
+            FROM ({select_query}) AS base
+            WHERE {pk_column} >= {current}
+              AND {pk_column} < {upper}
+        """
+        cursor = conn.cursor()
+        context.log.info(f"Executing batch query for {current}-{upper - 1}: {batch_query}")
+        cursor.execute(batch_query)
+        rows = cursor.fetchall()
+        columns = [desc[0] for desc in cursor.description]
+
+        df = pd.DataFrame(rows, columns=columns)
+        yield current, df
+
+        cursor.close()
+        current = upper
+
+    conn.close()
+
+
 def trino_load_op(context: OpExecutionContext, config: dict, df: pd.DataFrame) -> None:
     """Step 2: Load pandas DataFrame into Trino target table."""
     context.log.info(f"Connecting to Trino at {config['host']}:{config['port']}")
