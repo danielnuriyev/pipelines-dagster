@@ -1,0 +1,21 @@
+# Pipeline name determines which executor to use
+name: s3_to_trino
+
+# S3/MinIO source
+s3_endpoint: http://minio-498506da.trino.svc.cluster.local:9000
+s3_bucket: warehouse
+s3_key: imports/data.csv
+s3_access_key: admin
+# s3_secret_key is provided via environment variable S3_SECRET_KEY
+
+# Trino connection
+host: trino-6f3317f2-trino.trino.svc.cluster.local
+port: 8080
+user: dagster
+
+# Target table
+target_catalog: lakehouse
+target_schema: test
+target_table: s3_data
+
+after: trino_to_s3

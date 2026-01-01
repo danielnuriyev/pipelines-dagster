@@ -1,5 +1,5 @@
-# Pipeline type determines which executor to use
-type: trino_to_s3
+# Pipeline name determines which executor to use
+name: trino_to_s3
 
 # Trino connection
 host: trino-6f3317f2-trino.trino.svc.cluster.local
@@ -16,3 +16,4 @@ s3_key: exports/trino_export.csv
 s3_access_key: admin
 # s3_secret_key is provided via environment variable S3_SECRET_KEY
 
+after: test_a_trino_insert_select

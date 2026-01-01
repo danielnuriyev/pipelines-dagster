@@ -1,5 +1,5 @@
-# Pipeline type determines which executor to use
-type: trino_insert_select
+# Pipeline name determines which executor to use
+name: trino_insert_select
 
 # Trino connection
 host: trino-6f3317f2-trino.trino.svc.cluster.local

@@ -15,7 +15,11 @@ from dagster import (
     run_status_sensor,
 )
 
-from pipelines_dagster.ops import execute_trino_insert_select, execute_trino_to_s3
+from pipelines_dagster.ops import (
+    execute_s3_to_trino,
+    execute_trino_insert_select,
+    execute_trino_to_s3,
+)
 
 # Directory containing pipeline YAML configurations
 PIPELINES_DIR = Path(os.environ.get("PIPELINES_CONFIG_DIR", "/app/pipelines"))
@@ -36,6 +40,7 @@ def load_all_pipeline_configs() -> dict[str, dict]:
 PIPELINE_EXECUTORS = {
     "trino_insert_select": execute_trino_insert_select,
     "trino_to_s3": execute_trino_to_s3,
+    "s3_to_trino": execute_s3_to_trino,
 }
 
 
@@ -44,26 +49,26 @@ PIPELINE_EXECUTORS = {
 # =============================================================================
 
 
-def make_op_for_pipeline(name: str, config: dict):
+def make_op_for_pipeline(job_name: str, config: dict):
     """Create an op for a pipeline configuration."""
-    pipeline_type = config.get("type")
-    executor = PIPELINE_EXECUTORS.get(pipeline_type)
+    pipeline_name = config.get("name")
+    executor = PIPELINE_EXECUTORS.get(pipeline_name)
 
     if not executor:
-        raise ValueError(f"Unknown pipeline type: {pipeline_type} for pipeline: {name}")
+        raise ValueError(f"Unknown pipeline name: {pipeline_name} for job: {job_name}")
 
     # Create a Config class with the pipeline's default values
     class PipelineConfig(Config):
         pass
 
-    @op(name=f"{name}_op")
+    @op(name=f"{job_name}_op")
     def pipeline_op(context: OpExecutionContext):
-        """Dynamically generated op for {name}."""
-        context.log.info(f"Executing pipeline: {name} (type: {pipeline_type})")
+        """Dynamically generated op for {job_name}."""
+        context.log.info(f"Executing job: {job_name} (pipeline: {pipeline_name})")
         executor(context, config)
 
     # Update docstring
-    pipeline_op.__doc__ = f"Op for pipeline '{name}' (type: {pipeline_type})"
+    pipeline_op.__doc__ = f"Op for job '{job_name}' (pipeline: {pipeline_name})"
 
     return pipeline_op
 
@@ -89,20 +94,20 @@ def generate_pipelines() -> tuple[list, list, dict]:
     sensors = []
 
     # First pass: create all ops and jobs
-    for name, config in configs.items():
-        pipeline_type = config.get("type")
-        if not pipeline_type:
-            continue  # Skip configs without a type
+    for job_name, config in configs.items():
+        pipeline_name = config.get("name")
+        if not pipeline_name:
+            continue  # Skip configs without a name
 
-        pipeline_op = make_op_for_pipeline(name, config)
-        pipeline_job = make_job_for_pipeline(name, pipeline_op)
+        pipeline_op = make_op_for_pipeline(job_name, config)
+        pipeline_job = make_job_for_pipeline(job_name, pipeline_op)
 
-        ops[name] = pipeline_op
-        jobs[name] = pipeline_job
+        ops[job_name] = pipeline_op
+        jobs[job_name] = pipeline_job
 
     # Second pass: create sensors for "after" triggers
     # If job B has "after: [job_a, job_c]", create a sensor that triggers B when ANY of them succeeds
-    for name, config in configs.items():
+    for job_name, config in configs.items():
         after = config.get("after")
         if not after:
             continue
@@ -117,7 +122,7 @@ def generate_pipelines() -> tuple[list, list, dict]:
         monitored_jobs_list = [jobs[dep] for dep in after_list if dep in jobs]
 
         if monitored_jobs_list:
-            target_job = jobs[name]  # This job runs after
+            target_job = jobs[job_name]  # This job runs after
 
             # Create sensor name from dependencies
             deps_suffix = "_".join(after_list[:2])  # Limit name length
@@ -125,7 +130,7 @@ def generate_pipelines() -> tuple[list, list, dict]:
                 deps_suffix += f"_and_{len(after_list) - 2}_more"
 
             sensor = run_status_sensor(
-                name=f"{name}_after_{deps_suffix}_sensor",
+                name=f"{job_name}_after_{deps_suffix}_sensor",
                 run_status=DagsterRunStatus.SUCCESS,
                 monitored_jobs=monitored_jobs_list,
                 request_job=target_job,
