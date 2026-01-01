@@ -6,6 +6,7 @@ WORKDIR /app
 COPY pyproject.toml .
 COPY src/ src/
 COPY pipelines/ pipelines/
+COPY workspace.yaml .
 
 # Install the package with uv
 RUN uv pip install --system --no-cache .
@@ -16,5 +17,5 @@ ENV DAGSTER_HOME=/app
 # Expose the grpc port for user code
 EXPOSE 4000
 
-# Run dagster code server
-CMD ["dagster", "code-server", "start", "-h", "0.0.0.0", "-p", "4000", "-m", "pipelines_dagster.definitions"]
+# Default: run with workspace.yaml (can be overridden by deployment)
+CMD ["dagster", "code-server", "start", "-h", "0.0.0.0", "-p", "4000", "-w", "/app/workspace.yaml"]

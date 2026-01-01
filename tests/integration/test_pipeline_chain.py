@@ -25,7 +25,7 @@ POLL_INTERVAL_SECONDS = 5
 # For single dependency: {job}_after_{dep}_sensor
 # For multiple: {job}_after_{dep1}_{dep2}_sensor (or _and_N_more if >2)
 SENSOR_NAME = "test_b_trino_insert_select_after_test_a_trino_insert_select_sensor"
-REPOSITORY_LOCATION = "pipelines-dagster"
+REPOSITORY_LOCATION = "trino"
 REPOSITORY_NAME = "__repository__"
 
 
@@ -182,7 +182,7 @@ def launch_job(job_name: str) -> str:
     mutation LaunchRun($jobName: String!) {
       launchRun(executionParams: {
         selector: {
-          repositoryLocationName: "pipelines-dagster"
+          repositoryLocationName: "trino"
           repositoryName: "__repository__"
           jobName: $jobName
         }

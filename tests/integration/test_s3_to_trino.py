@@ -135,7 +135,7 @@ def launch_job(job_name: str) -> str:
     mutation LaunchRun($jobName: String!) {
       launchRun(executionParams: {
         selector: {
-          repositoryLocationName: "pipelines-dagster"
+          repositoryLocationName: "s3"
           repositoryName: "__repository__"
           jobName: $jobName
         }

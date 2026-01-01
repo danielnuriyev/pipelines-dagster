@@ -19,3 +19,4 @@ target_schema: test
 target_table: s3_data
 
 after: trino_to_s3
+

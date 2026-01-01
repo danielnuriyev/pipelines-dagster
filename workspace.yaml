@@ -1,0 +1,8 @@
+load_from:
+  - python_module:
+      module_name: pipelines_dagster.trino_defs
+      location_name: trino
+  - python_module:
+      module_name: pipelines_dagster.s3_defs
+      location_name: s3
+

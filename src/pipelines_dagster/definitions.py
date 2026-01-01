@@ -1,4 +1,4 @@
-"""Dynamically generated Dagster definitions from YAML configuration files."""
+"""Shared utilities for dynamically generating Dagster definitions from YAML."""
 
 import os
 from pathlib import Path
@@ -21,22 +21,10 @@ from pipelines_dagster.ops import (
     execute_trino_to_s3,
 )
 
-# Directory containing pipeline YAML configurations
-PIPELINES_DIR = Path(os.environ.get("PIPELINES_CONFIG_DIR", "/app/pipelines"))
+# Base directory containing pipeline YAML configurations
+PIPELINES_BASE_DIR = Path(os.environ.get("PIPELINES_CONFIG_DIR", "/app/pipelines"))
 
-
-def load_all_pipeline_configs() -> dict[str, dict]:
-    """Load all pipeline configurations from YAML files."""
-    configs = {}
-    if PIPELINES_DIR.exists():
-        for yaml_file in PIPELINES_DIR.glob("*.yaml"):
-            name = yaml_file.stem
-            with open(yaml_file) as f:
-                configs[name] = yaml.safe_load(f)
-    return configs
-
-
-# Map pipeline types to their executor functions
+# Map pipeline names to their executor functions
 PIPELINE_EXECUTORS = {
     "trino_insert_select": execute_trino_insert_select,
     "trino_to_s3": execute_trino_to_s3,
@@ -44,9 +32,15 @@ PIPELINE_EXECUTORS = {
 }
 
 
-# =============================================================================
-# Dynamic Op and Job Generation
-# =============================================================================
+def load_pipeline_configs_from_dir(directory: Path) -> dict[str, dict]:
+    """Load all pipeline configurations from YAML files in a directory."""
+    configs = {}
+    if directory.exists():
+        for yaml_file in directory.glob("*.yaml"):
+            name = yaml_file.stem
+            with open(yaml_file) as f:
+                configs[name] = yaml.safe_load(f)
+    return configs
 
 
 def make_op_for_pipeline(job_name: str, config: dict):
@@ -85,9 +79,10 @@ def make_job_for_pipeline(name: str, pipeline_op):
     return pipeline_job
 
 
-def generate_pipelines() -> tuple[list, list, dict]:
-    """Generate all ops, jobs, and sensors from YAML configurations."""
-    configs = load_all_pipeline_configs()
+def generate_definitions_for_workspace(workspace_name: str) -> Definitions:
+    """Generate Dagster definitions for a specific workspace (subdirectory)."""
+    workspace_dir = PIPELINES_BASE_DIR / workspace_name
+    configs = load_pipeline_configs_from_dir(workspace_dir)
 
     ops = {}
     jobs = {}
@@ -106,7 +101,6 @@ def generate_pipelines() -> tuple[list, list, dict]:
         jobs[job_name] = pipeline_job
 
     # Second pass: create sensors for "after" triggers
-    # If job B has "after: [job_a, job_c]", create a sensor that triggers B when ANY of them succeeds
     for job_name, config in configs.items():
         after = config.get("after")
         if not after:
@@ -118,14 +112,14 @@ def generate_pipelines() -> tuple[list, list, dict]:
         else:
             after_list = after
 
-        # Filter to only jobs that exist
+        # Filter to only jobs that exist in THIS workspace
         monitored_jobs_list = [jobs[dep] for dep in after_list if dep in jobs]
 
         if monitored_jobs_list:
-            target_job = jobs[job_name]  # This job runs after
+            target_job = jobs[job_name]
 
             # Create sensor name from dependencies
-            deps_suffix = "_".join(after_list[:2])  # Limit name length
+            deps_suffix = "_".join(after_list[:2])
             if len(after_list) > 2:
                 deps_suffix += f"_and_{len(after_list) - 2}_more"
 
@@ -138,33 +132,7 @@ def generate_pipelines() -> tuple[list, list, dict]:
 
             sensors.append(sensor)
 
-    return list(jobs.values()), sensors, ops
-
-
-# =============================================================================
-# Static definitions (noop job for health checks)
-# =============================================================================
-
-
-@op
-def noop_op():
-    """An op that does nothing."""
-    pass
-
-
-@job
-def noop_job():
-    """A job that does nothing - used for health checks."""
-    noop_op()
-
-
-# =============================================================================
-# Generate all definitions
-# =============================================================================
-
-generated_jobs, generated_sensors, _ops = generate_pipelines()
-
-defs = Definitions(
-    jobs=[noop_job, *generated_jobs],
-    sensors=generated_sensors,
-)
+    return Definitions(
+        jobs=list(jobs.values()),
+        sensors=sensors,
+    )

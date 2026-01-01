@@ -17,3 +17,4 @@ s3_access_key: admin
 # s3_secret_key is provided via environment variable S3_SECRET_KEY
 
 after: test_a_trino_insert_select
+
