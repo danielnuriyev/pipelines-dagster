@@ -1,6 +1,13 @@
 # Pipeline name determines which executor to use
 name: trino_to_s3
 
+# Asset this pipeline produces (no dots allowed in keys)
+asset_key: ["s3", "warehouse", "exports", "trino_export_csv"]
+
+# Dependencies (asset keys this depends on)
+depends_on:
+  - ["lakehouse", "test", "test_b"]
+
 # Trino connection
 host: trino-6f3317f2-trino.trino.svc.cluster.local
 port: 8080
@@ -15,6 +22,4 @@ s3_bucket: warehouse
 s3_key: exports/trino_export.csv
 s3_access_key: admin
 # s3_secret_key is provided via environment variable S3_SECRET_KEY
-
-after: test_a_trino_insert_select
 

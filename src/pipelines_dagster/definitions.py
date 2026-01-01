@@ -5,16 +5,14 @@ from pathlib import Path
 
 import yaml
 from dagster import (
-    Config,
-    DagsterRunStatus,
+    AssetExecutionContext,
+    AssetKey,
+    AutoMaterializePolicy,
     DefaultScheduleStatus,
     Definitions,
-    OpExecutionContext,
-    RunRequest,
     ScheduleDefinition,
-    job,
-    op,
-    run_status_sensor,
+    asset,
+    define_asset_job,
 )
 
 from pipelines_dagster.ops import (
@@ -45,40 +43,42 @@ def load_pipeline_configs_from_dir(directory: Path) -> dict[str, dict]:
     return configs
 
 
-def make_op_for_pipeline(job_name: str, config: dict):
-    """Create an op for a pipeline configuration."""
+def make_asset_for_pipeline(job_name: str, config: dict):
+    """Create an asset for a pipeline configuration."""
     pipeline_name = config.get("name")
     executor = PIPELINE_EXECUTORS.get(pipeline_name)
 
     if not executor:
         raise ValueError(f"Unknown pipeline name: {pipeline_name} for job: {job_name}")
 
-    # Create a Config class with the pipeline's default values
-    class PipelineConfig(Config):
-        pass
+    # Get asset key from config
+    asset_key_list = config.get("asset_key")
+    if not asset_key_list:
+        raise ValueError(f"Missing 'asset_key' in config for job: {job_name}")
 
-    @op(name=f"{job_name}_op")
-    def pipeline_op(context: OpExecutionContext):
-        """Dynamically generated op for {job_name}."""
-        context.log.info(f"Executing job: {job_name} (pipeline: {pipeline_name})")
+    asset_key = AssetKey(asset_key_list)
+
+    # Get dependencies
+    depends_on = config.get("depends_on", [])
+    dep_keys = [AssetKey(dep) for dep in depends_on]
+
+    # Create the asset with auto-materialization for downstream triggering
+    # Note: when using key, we can't specify name (the last part of key becomes the name)
+    @asset(
+        key=asset_key,
+        deps=dep_keys,
+        auto_materialize_policy=AutoMaterializePolicy.eager(),
+    )
+    def pipeline_asset(context: AssetExecutionContext):
+        """Dynamically generated asset."""
+        context.log.info(f"Materializing asset: {asset_key} (pipeline: {pipeline_name})")
         executor(context, config)
+        context.log.info(f"Asset {asset_key} materialized successfully")
 
     # Update docstring
-    pipeline_op.__doc__ = f"Op for job '{job_name}' (pipeline: {pipeline_name})"
+    pipeline_asset.__doc__ = f"Asset '{job_name}' (pipeline: {pipeline_name})"
 
-    return pipeline_op
-
-
-def make_job_for_pipeline(name: str, pipeline_op):
-    """Create a job for a pipeline op."""
-
-    @job(name=name)
-    def pipeline_job():
-        pipeline_op()
-
-    pipeline_job.__doc__ = f"Job for pipeline '{name}'"
-
-    return pipeline_job
+    return pipeline_asset
 
 
 def generate_definitions_for_workspace(workspace_name: str) -> Definitions:
@@ -86,74 +86,51 @@ def generate_definitions_for_workspace(workspace_name: str) -> Definitions:
     workspace_dir = PIPELINES_BASE_DIR / workspace_name
     configs = load_pipeline_configs_from_dir(workspace_dir)
 
-    ops = {}
-    jobs = {}
-    sensors = []
+    assets = []
+    jobs = []
     schedules = []
 
-    # First pass: create all ops and jobs
+    # Create all assets
     for job_name, config in configs.items():
         pipeline_name = config.get("name")
         if not pipeline_name:
             continue  # Skip configs without a name
 
-        pipeline_op = make_op_for_pipeline(job_name, config)
-        pipeline_job = make_job_for_pipeline(job_name, pipeline_op)
+        asset_key = config.get("asset_key")
+        if not asset_key:
+            continue  # Skip configs without an asset_key
 
-        ops[job_name] = pipeline_op
-        jobs[job_name] = pipeline_job
+        pipeline_asset = make_asset_for_pipeline(job_name, config)
+        assets.append(pipeline_asset)
 
-    # Second pass: create sensors for "after" triggers
-    for job_name, config in configs.items():
-        after = config.get("after")
-        if not after:
-            continue
-
-        # Normalize to list
-        if isinstance(after, str):
-            after_list = [after]
-        else:
-            after_list = after
-
-        # Filter to only jobs that exist in THIS workspace
-        monitored_jobs_list = [jobs[dep] for dep in after_list if dep in jobs]
-
-        if monitored_jobs_list:
-            target_job = jobs[job_name]
-
-            # Create sensor name from dependencies
-            deps_suffix = "_".join(after_list[:2])
-            if len(after_list) > 2:
-                deps_suffix += f"_and_{len(after_list) - 2}_more"
-
-            sensor = run_status_sensor(
-                name=f"{job_name}_after_{deps_suffix}_sensor",
-                run_status=DagsterRunStatus.SUCCESS,
-                monitored_jobs=monitored_jobs_list,
-                request_job=target_job,
-            )(lambda context: RunRequest())
-
-            sensors.append(sensor)
-
-    # Third pass: create schedules
+    # Create jobs for assets that have schedules
     for job_name, config in configs.items():
         schedule_cron = config.get("schedule")
         if not schedule_cron:
             continue
 
-        if job_name not in jobs:
+        asset_key = config.get("asset_key")
+        if not asset_key:
             continue
 
+        # Create a job that materializes this specific asset
+        asset_job = define_asset_job(
+            name=f"{job_name}_job",
+            selection=[AssetKey(asset_key)],
+        )
+        jobs.append(asset_job)
+
+        # Create a schedule for this job
         schedule = ScheduleDefinition(
             name=f"{job_name}_schedule",
-            job=jobs[job_name],
+            job=asset_job,
             cron_schedule=schedule_cron,
             default_status=DefaultScheduleStatus.RUNNING,
         )
         schedules.append(schedule)
 
     return Definitions(
-        jobs=list(jobs.values()),
-        sensors=sensors,
+        assets=assets,
+        jobs=jobs,
         schedules=schedules,
     )

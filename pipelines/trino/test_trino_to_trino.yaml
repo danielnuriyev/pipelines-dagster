@@ -1,6 +1,12 @@
 # Pipeline name determines which executor to use
 name: trino_insert_select
 
+# Asset this pipeline produces
+asset_key: ["lakehouse", "test", "test_b"]
+
+# Dependencies (asset keys this depends on) - test_a is external/source data
+# depends_on: []
+
 # Trino connection
 host: trino-6f3317f2-trino.trino.svc.cluster.local
 port: 8080

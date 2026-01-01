@@ -46,6 +46,9 @@ def execute_s3_to_trino(context: OpExecutionContext, config: dict):
     target_table = config["target_table"]
     target_full_name = f"{target_catalog}.{target_schema}.{target_table}"
 
+    # Check if we should recreate the table
+    recreate_table = config.get("recreate_table", False)
+
     # Check if target table exists
     cursor.execute(f"""
         SELECT table_name FROM {target_catalog}.information_schema.tables
@@ -54,6 +57,13 @@ def execute_s3_to_trino(context: OpExecutionContext, config: dict):
         AND table_name = '{target_table}'
     """)
     table_exists = len(cursor.fetchall()) > 0
+
+    # Drop table if recreate_table is True
+    if table_exists and recreate_table:
+        context.log.info(f"Dropping table {target_full_name} (recreate_table=True)...")
+        cursor.execute(f"DROP TABLE {target_full_name}")
+        cursor.fetchall()
+        table_exists = False
 
     # Create table if it doesn't exist
     if not table_exists:
