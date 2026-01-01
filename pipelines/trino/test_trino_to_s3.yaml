@@ -1,6 +1,3 @@
-# Pipeline name determines which executor to use
-name: trino_to_s3
-
 # Asset this pipeline produces (no dots allowed in keys)
 asset_key: ["s3", "warehouse", "exports", "trino_export_csv"]
 
@@ -8,18 +5,17 @@ asset_key: ["s3", "warehouse", "exports", "trino_export_csv"]
 depends_on:
   - ["lakehouse", "test", "test_b"]
 
-# Trino connection
-host: trino-6f3317f2-trino.trino.svc.cluster.local
-port: 8080
-user: dagster
-
-# Query to execute
-select_query: "SELECT * FROM lakehouse.test.test_a"
-
-# S3/MinIO settings
-s3_endpoint: http://minio-498506da.trino.svc.cluster.local:9000
-s3_bucket: warehouse
-s3_key: exports/trino_export.csv
-s3_access_key: admin
-# s3_secret_key is provided via environment variable S3_SECRET_KEY
-
+# Pipeline steps
+steps:
+  - name: export
+    executor: trino_to_s3
+    config:
+      host: trino-6f3317f2-trino.trino.svc.cluster.local
+      port: 8080
+      user: dagster
+      select_query: "SELECT * FROM lakehouse.test.test_a"
+      s3_endpoint: http://minio-498506da.trino.svc.cluster.local:9000
+      s3_bucket: warehouse
+      s3_key: exports/trino_export.csv
+      s3_access_key: admin
+      # s3_secret_key is provided via environment variable S3_SECRET_KEY

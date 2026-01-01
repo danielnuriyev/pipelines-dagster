@@ -1,23 +1,21 @@
-# Pipeline name determines which executor to use
-name: trino_insert_select
-
 # Asset this pipeline produces
 asset_key: ["lakehouse", "test", "test_b"]
 
 # Dependencies (asset keys this depends on) - test_a is external/source data
 # depends_on: []
 
-# Trino connection
-host: trino-6f3317f2-trino.trino.svc.cluster.local
-port: 8080
-user: dagster
-
-# Query and target
-select_query: SELECT * FROM lakehouse.test.test_a
-target_catalog: lakehouse
-target_schema: test
-target_table: test_b
-
 # Schedule (cron expression) - runs every minute
 schedule: "* * * * *"
 
+# Pipeline steps
+steps:
+  - name: execute
+    executor: trino_insert_select
+    config:
+      host: trino-6f3317f2-trino.trino.svc.cluster.local
+      port: 8080
+      user: dagster
+      select_query: SELECT * FROM lakehouse.test.test_a
+      target_catalog: lakehouse
+      target_schema: test
+      target_table: test_b

@@ -1,6 +1,3 @@
-# Pipeline name determines which executor to use
-name: s3_to_trino
-
 # Asset this pipeline produces
 asset_key: ["lakehouse", "test", "s3_data"]
 
@@ -8,21 +5,20 @@ asset_key: ["lakehouse", "test", "s3_data"]
 depends_on:
   - ["s3", "warehouse", "exports", "trino_export_csv"]
 
-# S3/MinIO source
-s3_endpoint: http://minio-498506da.trino.svc.cluster.local:9000
-s3_bucket: warehouse
-s3_key: exports/trino_export.csv
-s3_access_key: admin
-# s3_secret_key is provided via environment variable S3_SECRET_KEY
-
-# Trino connection
-host: trino-6f3317f2-trino.trino.svc.cluster.local
-port: 8080
-user: dagster
-
-# Target table
-target_catalog: lakehouse
-target_schema: test
-target_table: s3_data
-recreate_table: true  # Drop and recreate table on each run
-
+# Pipeline steps
+steps:
+  - name: load
+    executor: s3_to_trino
+    config:
+      s3_endpoint: http://minio-498506da.trino.svc.cluster.local:9000
+      s3_bucket: warehouse
+      s3_key: exports/trino_export.csv
+      s3_access_key: admin
+      # s3_secret_key is provided via environment variable S3_SECRET_KEY
+      host: trino-6f3317f2-trino.trino.svc.cluster.local
+      port: 8080
+      user: dagster
+      target_catalog: lakehouse
+      target_schema: test
+      target_table: s3_data
+      recreate_table: true  # Drop and recreate table on each run
