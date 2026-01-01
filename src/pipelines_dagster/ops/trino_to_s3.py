@@ -9,8 +9,10 @@ from botocore.client import Config as BotoConfig
 from dagster import OpExecutionContext
 
 
-def execute_trino_to_s3(context: OpExecutionContext, config: dict):
+def trino_to_s3_op(context: OpExecutionContext, config: dict) -> None:
     """Execute a SELECT query in Trino and export results to S3 as CSV."""
+    context.log.info(f"Connecting to Trino at {config['host']}:{config['port']}")
+
     conn = trino.dbapi.connect(
         host=config["host"],
         port=config["port"],
@@ -38,6 +40,7 @@ def execute_trino_to_s3(context: OpExecutionContext, config: dict):
     s3_secret_key = os.environ.get("S3_SECRET_KEY", "")
 
     # Upload to S3/MinIO
+    context.log.info(f"Uploading to S3: {config['s3_endpoint']}/{config['s3_bucket']}/{config['s3_key']}")
     s3_client = boto3.client(
         "s3",
         endpoint_url=config["s3_endpoint"],
@@ -54,4 +57,3 @@ def execute_trino_to_s3(context: OpExecutionContext, config: dict):
     )
 
     context.log.info(f"Uploaded CSV to s3://{config['s3_bucket']}/{config['s3_key']}")
-

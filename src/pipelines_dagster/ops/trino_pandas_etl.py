@@ -1,40 +1,46 @@
-"""S3 to Trino load operation."""
+"""Trino ETL pipeline with pandas DataFrame as intermediate.
 
-import os
-from io import StringIO
+This pipeline has two distinct steps:
+1. Extract: SELECT from Trino into pandas DataFrame
+2. Load: INSERT DataFrame into Trino target table
+"""
 
-import boto3
 import pandas as pd
 import trino
-from botocore.client import Config as BotoConfig
 from dagster import OpExecutionContext
 
 
-def s3_to_trino_op(context: OpExecutionContext, config: dict) -> None:
-    """Load a CSV file from S3 into a Trino table."""
-    # Get S3 secret from environment
-    s3_secret_key = os.environ.get("S3_SECRET_KEY", "")
-
-    # Download CSV from S3
-    context.log.info(f"Downloading from S3: {config['s3_endpoint']}/{config['s3_bucket']}/{config['s3_key']}")
-    s3_client = boto3.client(
-        "s3",
-        endpoint_url=config["s3_endpoint"],
-        aws_access_key_id=config["s3_access_key"],
-        aws_secret_access_key=s3_secret_key,
-        config=BotoConfig(signature_version="s3v4"),
-    )
-
-    context.log.info(f"Downloading CSV from s3://{config['s3_bucket']}/{config['s3_key']}")
-    response = s3_client.get_object(Bucket=config["s3_bucket"], Key=config["s3_key"])
-    csv_content = response["Body"].read().decode("utf-8")
-
-    # Parse CSV with pandas
-    df = pd.read_csv(StringIO(csv_content))
-    context.log.info(f"Loaded {len(df)} rows with columns: {list(df.columns)}")
-
-    # Connect to Trino
+def trino_extract_op(context: OpExecutionContext, config: dict) -> pd.DataFrame:
+    """Step 1: Extract data from Trino source table into pandas DataFrame."""
     context.log.info(f"Connecting to Trino at {config['host']}:{config['port']}")
+
+    conn = trino.dbapi.connect(
+        host=config["host"],
+        port=config["port"],
+        user=config["user"],
+    )
+    cursor = conn.cursor()
+
+    select_query = config["select_query"]
+    context.log.info(f"Executing query: {select_query}")
+    cursor.execute(select_query)
+
+    rows = cursor.fetchall()
+    columns = [desc[0] for desc in cursor.description]
+
+    cursor.close()
+    conn.close()
+
+    df = pd.DataFrame(rows, columns=columns)
+    context.log.info(f"Extracted {len(df)} rows with columns: {list(df.columns)}")
+
+    return df
+
+
+def trino_load_op(context: OpExecutionContext, config: dict, df: pd.DataFrame) -> None:
+    """Step 2: Load pandas DataFrame into Trino target table."""
+    context.log.info(f"Connecting to Trino at {config['host']}:{config['port']}")
+
     conn = trino.dbapi.connect(
         host=config["host"],
         port=config["port"],
@@ -68,17 +74,19 @@ def s3_to_trino_op(context: OpExecutionContext, config: dict) -> None:
 
     # Create table if it doesn't exist
     if not table_exists:
-        context.log.info(f"Table {target_full_name} does not exist. Creating...")
-        # Infer column types from pandas DataFrame
+        context.log.info(f"Creating table {target_full_name}...")
         column_defs = []
         for col in df.columns:
             dtype = df[col].dtype
+            dtype_str = str(dtype)
             if dtype == "int64":
                 trino_type = "BIGINT"
             elif dtype == "float64":
                 trino_type = "DOUBLE"
             elif dtype == "bool":
                 trino_type = "BOOLEAN"
+            elif "datetime" in dtype_str:
+                trino_type = "TIMESTAMP"
             else:
                 trino_type = "VARCHAR"
             column_defs.append(f'"{col}" {trino_type}')
@@ -100,8 +108,15 @@ def s3_to_trino_op(context: OpExecutionContext, config: dict) -> None:
             elif isinstance(val, str):
                 escaped = val.replace("'", "''")
                 values.append(f"'{escaped}'")
-            else:
+            elif isinstance(val, (int, float)):
                 values.append(str(val))
+            elif hasattr(val, "strftime"):
+                # Handle datetime/timestamp values
+                ts_str = val.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+                values.append(f"TIMESTAMP '{ts_str}'")
+            else:
+                escaped = str(val).replace("'", "''")
+                values.append(f"'{escaped}'")
         values_str = ", ".join(values)
         insert_sql = f"INSERT INTO {target_full_name} ({columns}) VALUES ({values_str})"
         cursor.execute(insert_sql)

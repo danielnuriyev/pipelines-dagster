@@ -32,9 +32,10 @@ This project uses **Dagster Assets** with auto-materialization for cross-workspa
 │                                                                         │
 │  trino workspace:                           s3 workspace:               │
 │                                                                         │
-│  ┌──────────────────────┐                                               │
-│  │ lakehouse/test/test_b│◄── schedule (every minute)                    │
-│  └──────────┬───────────┘                                               │
+│  ┌──────────────────────┐    ┌─────────────────────────┐                │
+│  │ lakehouse/test/test_b│    │ lakehouse/test/         │                │
+│  │ ◄── schedule (1 min) │    │ test_c                  │                │
+│  └──────────┬───────────┘    └─────────────────────────┘                │
 │             │                                                           │
 │             ▼                                                           │
 │  ┌─────────────────────────┐                                            │
@@ -78,11 +79,13 @@ pipelines-dagster/
 │       └── ops/                 # Pipeline executors
 │           ├── trino_insert_select.py
 │           ├── trino_to_s3.py
-│           └── s3_to_trino.py
+│           ├── s3_to_trino.py
+│           └── trino_pandas_etl.py
 ├── pipelines/
 │   ├── trino/                   # Trino workspace pipelines
 │   │   ├── test_trino_to_trino.yaml
-│   │   └── test_trino_to_s3.yaml
+│   │   ├── test_trino_to_s3.yaml
+│   │   └── test_trino_pandas_etl.yaml
 │   └── s3/                      # S3 workspace pipelines
 │       └── test_s3_to_trino.yaml
 ├── tests/

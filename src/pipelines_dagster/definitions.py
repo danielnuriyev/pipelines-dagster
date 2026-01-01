@@ -2,33 +2,38 @@
 
 import os
 from pathlib import Path
+from typing import Any, Callable
 
 import yaml
 from dagster import (
-    AssetExecutionContext,
     AssetKey,
     AutoMaterializePolicy,
     DefaultScheduleStatus,
     Definitions,
+    In,
+    OpExecutionContext,
+    Out,
     ScheduleDefinition,
     asset,
     define_asset_job,
+    graph_asset,
+    op,
 )
 
-from pipelines_dagster.ops import (
-    execute_s3_to_trino,
-    execute_trino_insert_select,
-    execute_trino_to_s3,
-)
+from pipelines_dagster.ops.s3_to_trino import s3_to_trino_op
+from pipelines_dagster.ops.trino_insert_select import trino_insert_select_op
+from pipelines_dagster.ops.trino_pandas_etl import trino_extract_op, trino_load_op
+from pipelines_dagster.ops.trino_to_s3 import trino_to_s3_op
 
 # Base directory containing pipeline YAML configurations
 PIPELINES_BASE_DIR = Path(os.environ.get("PIPELINES_CONFIG_DIR", "/app/pipelines"))
 
+
 # Map pipeline names to their executor functions
-PIPELINE_EXECUTORS = {
-    "trino_insert_select": execute_trino_insert_select,
-    "trino_to_s3": execute_trino_to_s3,
-    "s3_to_trino": execute_s3_to_trino,
+PIPELINE_EXECUTORS: dict[str, Callable[[OpExecutionContext, dict], Any]] = {
+    "trino_insert_select": lambda ctx, cfg: trino_insert_select_op(ctx, cfg),
+    "trino_to_s3": lambda ctx, cfg: trino_to_s3_op(ctx, cfg),
+    "s3_to_trino": lambda ctx, cfg: s3_to_trino_op(ctx, cfg),
 }
 
 
@@ -43,13 +48,39 @@ def load_pipeline_configs_from_dir(directory: Path) -> dict[str, dict]:
     return configs
 
 
+def make_pandas_etl_graph_asset(job_name: str, asset_key: AssetKey, config: dict):
+    """Create a graph_asset for the pandas ETL pipeline with visible extract and load ops."""
+
+    @op(
+        name=f"{job_name}_extract",
+        out=Out(description="DataFrame extracted from Trino"),
+    )
+    def extract_op(context: OpExecutionContext):
+        return trino_extract_op(context, config)
+
+    @op(
+        name=f"{job_name}_load",
+        ins={"df": In(description="DataFrame to load")},
+        out=Out(is_required=False),
+    )
+    def load_op(context: OpExecutionContext, df):
+        trino_load_op(context, config, df)
+        return None
+
+    @graph_asset(
+        key=asset_key,
+        auto_materialize_policy=AutoMaterializePolicy.eager(),
+    )
+    def pandas_etl_graph():
+        df = extract_op()
+        return load_op(df)
+
+    return pandas_etl_graph
+
+
 def make_asset_for_pipeline(job_name: str, config: dict):
     """Create an asset for a pipeline configuration."""
     pipeline_name = config.get("name")
-    executor = PIPELINE_EXECUTORS.get(pipeline_name)
-
-    if not executor:
-        raise ValueError(f"Unknown pipeline name: {pipeline_name} for job: {job_name}")
 
     # Get asset key from config
     asset_key_list = config.get("asset_key")
@@ -60,23 +91,24 @@ def make_asset_for_pipeline(job_name: str, config: dict):
 
     # Get dependencies
     depends_on = config.get("depends_on", [])
-    dep_keys = [AssetKey(dep) for dep in depends_on]
+    dep_keys = {AssetKey(dep) for dep in depends_on}
 
-    # Create the asset with auto-materialization for downstream triggering
-    # Note: when using key, we can't specify name (the last part of key becomes the name)
+    # Special handling for multi-op trino_pandas_etl pipeline
+    if pipeline_name == "trino_pandas_etl":
+        return make_pandas_etl_graph_asset(job_name, asset_key, config)
+
+    # For other pipelines, use single-op assets
+    executor = PIPELINE_EXECUTORS.get(pipeline_name)
+    if not executor:
+        raise ValueError(f"Unknown pipeline name: {pipeline_name} for job: {job_name}")
+
     @asset(
         key=asset_key,
-        deps=dep_keys,
+        non_argument_deps=dep_keys if dep_keys else None,
         auto_materialize_policy=AutoMaterializePolicy.eager(),
     )
-    def pipeline_asset(context: AssetExecutionContext):
-        """Dynamically generated asset."""
-        context.log.info(f"Materializing asset: {asset_key} (pipeline: {pipeline_name})")
+    def pipeline_asset(context: OpExecutionContext):
         executor(context, config)
-        context.log.info(f"Asset {asset_key} materialized successfully")
-
-    # Update docstring
-    pipeline_asset.__doc__ = f"Asset '{job_name}' (pipeline: {pipeline_name})"
 
     return pipeline_asset
 

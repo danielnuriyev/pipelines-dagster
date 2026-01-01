@@ -1,0 +1,23 @@
+# Pipeline name determines which executor to use
+name: trino_pandas_etl
+
+# Asset this pipeline produces
+asset_key: ["lakehouse", "test", "test_c"]
+
+# Dependencies (asset keys this depends on)
+# depends_on: []
+
+# Trino connection
+host: trino-6f3317f2-trino.trino.svc.cluster.local
+port: 8080
+user: dagster
+
+# Step 1: Extract - SELECT query to run
+select_query: SELECT * FROM lakehouse.test.test_a
+
+# Step 2: Load - Target table configuration
+target_catalog: lakehouse
+target_schema: test
+target_table: test_c
+recreate_table: true  # Drop and recreate table on each run
+

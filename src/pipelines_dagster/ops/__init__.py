@@ -1,8 +1,14 @@
-"""Pipeline operation executors."""
+"""Pipeline operation functions for Dagster assets."""
 
-from pipelines_dagster.ops.s3_to_trino import execute_s3_to_trino
-from pipelines_dagster.ops.trino_insert_select import execute_trino_insert_select
-from pipelines_dagster.ops.trino_to_s3 import execute_trino_to_s3
+from pipelines_dagster.ops.s3_to_trino import s3_to_trino_op
+from pipelines_dagster.ops.trino_insert_select import trino_insert_select_op
+from pipelines_dagster.ops.trino_pandas_etl import trino_extract_op, trino_load_op
+from pipelines_dagster.ops.trino_to_s3 import trino_to_s3_op
 
-__all__ = ["execute_trino_insert_select", "execute_trino_to_s3", "execute_s3_to_trino"]
-
+__all__ = [
+    "trino_insert_select_op",
+    "trino_to_s3_op",
+    "s3_to_trino_op",
+    "trino_extract_op",
+    "trino_load_op",
+]

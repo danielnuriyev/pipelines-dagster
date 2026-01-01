@@ -4,8 +4,10 @@ import trino
 from dagster import OpExecutionContext
 
 
-def execute_trino_insert_select(context: OpExecutionContext, config: dict):
+def trino_insert_select_op(context: OpExecutionContext, config: dict) -> None:
     """Execute INSERT INTO target_table SELECT ... with configurable source and target."""
+    context.log.info(f"Connecting to Trino at {config['host']}:{config['port']}")
+
     conn = trino.dbapi.connect(
         host=config["host"],
         port=config["port"],
@@ -36,4 +38,3 @@ def execute_trino_insert_select(context: OpExecutionContext, config: dict):
 
     cursor.close()
     conn.close()
-
