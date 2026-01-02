@@ -118,6 +118,34 @@ steps:
 schedule: "* * * * *"  # Run every minute
 ```
 
+### Retry Configuration
+
+**Configurable retries** are built into all Trino and S3 operations. Each step can override default retry behavior:
+
+```yaml
+steps:
+  - name: extract
+    executor: trino_extract
+    config:
+      # ... other config ...
+      retry:
+        max_attempts: 5      # Number of retry attempts (default: 3)
+        base_delay: 3.0      # Initial delay in seconds (default: 2.0 for Trino, 1.0 for S3)
+        max_delay: 60.0      # Maximum delay cap in seconds (default: 30.0 for Trino, 20.0 for S3)
+        backoff_factor: 2.0  # Exponential backoff multiplier (default: 2.0)
+        jitter: true         # Add random jitter to prevent thundering herd (default: true)
+```
+
+**Defaults:**
+- **Trino operations**: 3 retries, 2s base delay, 30s max delay
+- **S3 operations**: 3 retries, 1s base delay, 20s max delay
+
+**Retryable errors:**
+- Connection issues and timeouts
+- Service temporary unavailability
+- Rate limiting and throttling
+- Network connectivity problems
+
 ### Concurrency Configuration
 
 Control how many operations run simultaneously:

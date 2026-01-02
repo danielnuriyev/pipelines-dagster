@@ -9,6 +9,12 @@ import pandas as pd
 import trino
 from dagster import OpExecutionContext
 
+from pipelines_dagster.retry_utils import (
+    retry_with_backoff,
+    is_retryable_trino_error,
+    get_retry_config_from_yaml
+)
+
 
 def trino_extract_op(context: OpExecutionContext, config: dict):
     """
@@ -28,11 +34,26 @@ def trino_extract_op(context: OpExecutionContext, config: dict):
         return _extract_batches(context, config)
     
     # Non-batched: fetch all data
-    conn = trino.dbapi.connect(
-        host=config["host"],
-        port=config["port"],
-        user=config["user"],
-    )
+    def connect_trino():
+        return trino.dbapi.connect(
+            host=config["host"],
+            port=config["port"],
+            user=config["user"],
+        )
+
+    retry_config = get_retry_config_from_yaml(config, "trino")
+    try:
+        conn = retry_with_backoff(
+            connect_trino,
+            retry_config,
+            context
+        )
+    except Exception as e:
+        if not is_retryable_trino_error(e):
+            raise
+        # If it's retryable but still failed, re-raise
+        raise
+
     cursor = conn.cursor()
 
     context.log.info(f"Executing query: {select_query}")
@@ -56,11 +77,24 @@ def _extract_batches(context: OpExecutionContext, config: dict):
     pk_column = config.get("pk")
     select_query = config["select_query"]
 
-    conn = trino.dbapi.connect(
-        host=config["host"],
-        port=config["port"],
-        user=config["user"],
-    )
+    def connect_trino():
+        return trino.dbapi.connect(
+            host=config["host"],
+            port=config["port"],
+            user=config["user"],
+        )
+
+    retry_config = get_retry_config_from_yaml(config, "trino")
+    try:
+        conn = retry_with_backoff(
+            connect_trino,
+            retry_config,
+            context
+        )
+    except Exception as e:
+        if not is_retryable_trino_error(e):
+            raise
+        raise
     cursor = conn.cursor()
 
     cursor.execute(

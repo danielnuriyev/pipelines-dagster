@@ -21,6 +21,10 @@ steps:
       select_query: SELECT * FROM lakehouse.test.test_a
       batch_size: 10  # Single level batching: 100 rows -> 10 batches of 10
       pk: id
+      retry:  # Custom retry configuration
+        max_attempts: 5  # Try up to 5 times instead of default 3
+        base_delay: 3.0   # Wait 3s, 6s, 12s, 24s, 48s
+        max_delay: 60.0   # Cap delay at 60 seconds
 
   # Step 2: Load each batch into test_d
   - name: load

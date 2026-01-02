@@ -3,16 +3,35 @@
 import trino
 from dagster import OpExecutionContext
 
+from pipelines_dagster.retry_utils import (
+    retry_with_backoff,
+    is_retryable_trino_error,
+    get_retry_config_from_yaml
+)
+
 
 def trino_insert_select_op(context: OpExecutionContext, config: dict) -> None:
     """Execute INSERT INTO target_table SELECT ... with configurable source and target."""
     context.log.info(f"Connecting to Trino at {config['host']}:{config['port']}")
 
-    conn = trino.dbapi.connect(
-        host=config["host"],
-        port=config["port"],
-        user=config["user"],
-    )
+    def connect_trino():
+        return trino.dbapi.connect(
+            host=config["host"],
+            port=config["port"],
+            user=config["user"],
+        )
+
+    retry_config = get_retry_config_from_yaml(config, "trino")
+    try:
+        conn = retry_with_backoff(
+            connect_trino,
+            retry_config,
+            context
+        )
+    except Exception as e:
+        if not is_retryable_trino_error(e):
+            raise
+        raise
     cursor = conn.cursor()
 
     target_full_name = f"{config['target_catalog']}.{config['target_schema']}.{config['target_table']}"
