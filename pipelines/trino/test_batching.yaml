@@ -4,12 +4,16 @@ asset_key: ["lakehouse", "test", "test_d"]
 # Dependencies (asset keys this depends on)
 # depends_on: []
 
+# Job-level concurrency (max concurrent ops in this job)
+job_concurrency: 3
+
 # Pipeline steps - two-step ETL with single-level batching
 steps:
   # Step 1: Extract from Trino in batches of 10
   - name: extract
     executor: trino_extract
     outputs: ["df"]
+    concurrency_key: "trino_reads"  # Limit concurrent Trino reads
     config:
       host: trino-6f3317f2-trino.trino.svc.cluster.local
       port: 8080
@@ -22,6 +26,7 @@ steps:
   - name: load
     executor: trino_load
     inputs: ["df"]
+    concurrency_key: "trino_writes"  # Limit concurrent Trino writes
     config:
       host: trino-6f3317f2-trino.trino.svc.cluster.local
       port: 8080

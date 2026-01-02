@@ -55,6 +55,29 @@ This project uses **Dagster Assets** with auto-materialization for cross-workspa
 
 ## Setup
 
+### Instance Configuration
+
+Create `dagster.yaml` in your project root to configure global concurrency limits:
+
+```yaml
+# Global concurrency limits
+run_coordinator:
+  module: dagster.core.run_coordinator
+  class: QueuedRunCoordinator
+  config:
+    max_concurrent_runs: 5
+
+# Operation-level concurrency limits
+concurrency:
+  default_limit:
+    - key: "trino_reads"
+      limit: 2
+    - key: "trino_writes"
+      limit: 2
+    - key: "s3_operations"
+      limit: 3
+```
+
 ```bash
 # Install dependencies
 uv sync
@@ -93,6 +116,27 @@ steps:
 
 # Optional: Schedule (cron expression)
 schedule: "* * * * *"  # Run every minute
+```
+
+### Concurrency Configuration
+
+Control how many operations run simultaneously:
+
+```yaml
+# Job-level concurrency (max concurrent ops in this job)
+job_concurrency: 3
+
+# Pipeline steps with concurrency controls
+steps:
+  - name: extract
+    executor: trino_extract
+    concurrency_key: "trino_reads"  # Limits concurrent Trino reads
+    config: ...
+
+  - name: load
+    executor: trino_load
+    concurrency_key: "trino_writes"  # Limits concurrent Trino writes
+    config: ...
 ```
 
 ### Available Executors

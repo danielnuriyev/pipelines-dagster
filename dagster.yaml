@@ -1,0 +1,24 @@
+# Dagster instance configuration
+# This file controls global Dagster settings like concurrency limits
+
+run_coordinator:
+  module: dagster.core.run_coordinator
+  class: QueuedRunCoordinator
+  config:
+    max_concurrent_runs: 5  # Maximum concurrent job runs across the instance
+
+run_launcher:
+  module: dagster.core.launcher
+  class: DefaultRunLauncher
+  config:
+    max_concurrent_runs: 5
+
+# Concurrency limits for tagged operations
+concurrency:
+  default_limit:
+    - key: "trino_reads"
+      limit: 2  # Max 2 concurrent Trino read operations
+    - key: "trino_writes"
+      limit: 2  # Max 2 concurrent Trino write operations
+    - key: "s3_operations"
+      limit: 3  # Max 3 concurrent S3 operations

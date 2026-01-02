@@ -19,6 +19,8 @@ from dagster import (
     asset,
     define_asset_job,
     graph_asset,
+    job,
+    multiprocess_executor,
     op,
 )
 
@@ -73,37 +75,43 @@ def create_op_for_step(step_name: str, executor_func: Callable, step_config: dic
     has_outputs = step_config.get("outputs") is not None and len(step_config.get("outputs", [])) > 0
     step_cfg = step_config.get("config", {})
 
+    # Extract concurrency settings
+    concurrency_key = step_config.get("concurrency_key")
+    op_tags = {}
+    if concurrency_key:
+        op_tags["dagster/concurrency_key"] = concurrency_key
+
     if is_batching:
         # Batching op: produces DynamicOut
         if has_inputs:
-            @op(name=f"{job_name}_{step_name}", ins={"data": In()}, out=DynamicOut())
+            @op(name=f"{job_name}_{step_name}", ins={"data": In()}, out=DynamicOut(), tags=op_tags)
             def step_op(context: OpExecutionContext, data):
                 result = executor_func(context, step_cfg, data)
                 for batch_key, batch_data in result:
                     yield DynamicOutput(batch_data, mapping_key=str(batch_key))
         else:
-            @op(name=f"{job_name}_{step_name}", out=DynamicOut())
+            @op(name=f"{job_name}_{step_name}", out=DynamicOut(), tags=op_tags)
             def step_op(context: OpExecutionContext):
                 result = executor_func(context, step_cfg)
                 for batch_key, batch_data in result:
                     yield DynamicOutput(batch_data, mapping_key=str(batch_key))
     elif has_inputs and has_outputs:
-        @op(name=f"{job_name}_{step_name}", ins={"data": In()}, out=Out())
+        @op(name=f"{job_name}_{step_name}", ins={"data": In()}, out=Out(), tags=op_tags)
         def step_op(context: OpExecutionContext, data):
             return executor_func(context, step_cfg, data)
 
     elif has_inputs and not has_outputs:
-        @op(name=f"{job_name}_{step_name}", ins={"data": In()})
+        @op(name=f"{job_name}_{step_name}", ins={"data": In()}, tags=op_tags)
         def step_op(context: OpExecutionContext, data):
             executor_func(context, step_cfg, data)
 
     elif not has_inputs and has_outputs:
-        @op(name=f"{job_name}_{step_name}", out=Out())
+        @op(name=f"{job_name}_{step_name}", out=Out(), tags=op_tags)
         def step_op(context: OpExecutionContext):
             return executor_func(context, step_cfg)
 
     else:
-        @op(name=f"{job_name}_{step_name}")
+        @op(name=f"{job_name}_{step_name}", tags=op_tags)
         def step_op(context: OpExecutionContext):
             executor_func(context, step_cfg)
 
@@ -329,11 +337,27 @@ def generate_definitions_for_workspace(workspace_name: str) -> Definitions:
             continue
 
         # Create a job that materializes this specific asset
-        asset_job = define_asset_job(
-            name=f"{job_name}_job",
-            selection=[AssetKey(asset_key)],
-        )
-        jobs.append(asset_job)
+        job_concurrency = config.get("job_concurrency")
+        if job_concurrency:
+            # Custom job with concurrency limits
+            @job(
+                name=f"{job_name}_job",
+                executor_def=multiprocess_executor.configured({
+                    "max_concurrent": job_concurrency
+                })
+            )
+            def asset_job():
+                # Import here to avoid circular imports
+                from dagster import materialize
+                materialize([AssetKey(asset_key)])
+            jobs.append(asset_job)
+        else:
+            # Default job without concurrency limits
+            asset_job = define_asset_job(
+                name=f"{job_name}_job",
+                selection=[AssetKey(asset_key)],
+            )
+            jobs.append(asset_job)
 
         # Create a schedule for this job
         schedule = ScheduleDefinition(
