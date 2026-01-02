@@ -257,7 +257,9 @@ def make_graph_asset_from_steps(
                             batch_cfg["recreate_table"] = False
                         step_executor(context, batch_cfg, batch_data)
                         batch_data = None
-
+                    # TODO: 
+                    # switch from recursion to queue and add progress bar
+                    # not doing it now because chaining batches is not common
                     execute_steps_from(start_idx + 1, batch_data, new_batch_context)
 
                 context.log.info(f"Step {start_idx} completed {batch_num} batches")
