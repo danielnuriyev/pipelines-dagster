@@ -7,6 +7,11 @@ asset_key: ["lakehouse", "test", "test_d"]
 # Job-level concurrency (max concurrent ops in this job)
 job_concurrency: 3
 
+# Job retry configuration
+job_retry:
+  max_attempts: 3          # Maximum retry attempts
+  max_delay: 3600          # Maximum delay (1 hour)
+
 # Pipeline steps - two-step ETL with single-level batching
 steps:
   # Step 1: Extract from Trino in batches of 10

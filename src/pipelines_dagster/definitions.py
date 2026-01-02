@@ -31,6 +31,7 @@ from pipelines_dagster.ops.trino_extract import (
     trino_extract_op,
     trino_load_op,
 )
+from pipelines_dagster.sensors import create_job_retry_sensor
 from pipelines_dagster.ops.trino_to_s3 import trino_to_s3_op
 
 # Base directory containing pipeline YAML configurations
@@ -318,6 +319,7 @@ def generate_definitions_for_workspace(workspace_name: str) -> Definitions:
     assets = []
     jobs = []
     schedules = []
+    sensors = []
 
     # Create all assets
     for job_name, config in configs.items():
@@ -370,8 +372,16 @@ def generate_definitions_for_workspace(workspace_name: str) -> Definitions:
         )
         schedules.append(schedule)
 
+    # Create sensors for pipelines with retry configuration
+    for job_name, config in configs.items():
+        retry_config = config.get("job_retry")
+        if retry_config:
+            retry_sensor = create_job_retry_sensor(job_name, config)
+            sensors.append(retry_sensor)
+
     return Definitions(
         assets=assets,
         jobs=jobs,
         schedules=schedules,
+        sensors=sensors,
     )

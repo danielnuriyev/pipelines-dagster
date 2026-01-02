@@ -146,6 +146,44 @@ steps:
 - Rate limiting and throttling
 - Network connectivity problems
 
+### Job Retry Configuration
+
+**Intelligent job-level retries** with failure-aware scaling:
+
+```yaml
+# Job retry configuration - simplified YAML
+job_retry:
+  max_attempts: 3          # Maximum retry attempts (default: 3)
+  max_delay: 3600          # Maximum delay cap in seconds (default: 3600)
+```
+
+**Hardcoded defaults:**
+- `base_delay`: 60 seconds (1 minute)
+- `backoff_factor`: 2.0 (exponential backoff)
+- `retry_on_memory_failure`: true (OOM failures get memory scaling)
+- `memory_multiplier`: 2.0 (double memory for OOM failures)
+
+**Intelligent Failure Detection:**
+- **Out of Memory (OOM)**: Automatically retries with doubled memory allocation
+- **Pod Deletion**: Retries normally (infrastructure-level issue)
+- **Other Failures**: Standard exponential backoff retry
+
+**Sensor-Based Retries:**
+- Monitors failed job runs
+- Analyzes failure logs to determine cause
+- Applies appropriate retry strategy
+- Sensors are created automatically for pipelines with `job_retry` config
+- **Sensors start in STOPPED status** - enable them in Dagster UI or via API
+
+**Example:**
+```yaml
+job_retry:
+  max_attempts: 5        # Override default 3 attempts
+  max_delay: 7200        # Allow up to 2 hours between retries
+```
+
+**All other settings use sensible hardcoded defaults for intelligent retry behavior.**
+
 ### Concurrency Configuration
 
 Control how many operations run simultaneously:
@@ -341,6 +379,23 @@ curl -s -X POST http://localhost:3000/graphql \
 ```
 
 The `ASSET` daemon must be healthy for auto-materialization to work.
+
+### Enable Sensors
+
+Sensors for job retries start in STOPPED status. Enable them after deployment:
+
+```bash
+# Enable retry sensors
+for sensor in $(curl -s -X POST http://localhost:3000/graphql \
+  -H "Content-Type: application/json" \
+  -d '{"query":"{ workspaceOrError { ... on Workspace { sensors { name } } } }"}' \
+  | python3 -c "import sys,json; data=json.load(sys.stdin); print('\n'.join([s['name'] for s in data['data']['workspaceOrError']['sensors'] if 'retry_sensor' in s['name']]))"); do
+  echo "Enabling sensor: $sensor"
+  curl -s -X POST http://localhost:3000/graphql \
+    -H "Content-Type: application/json" \
+    -d "{\"query\":\"mutation { setSensorStatus(sensorSelector: {sensorName: \\\"$sensor\\\"}, status: RUNNING) { ... on SensorState { status } } }\"}"
+done
+```
 
 ## Data Setup
 
