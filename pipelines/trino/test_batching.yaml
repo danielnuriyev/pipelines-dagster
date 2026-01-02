@@ -12,7 +12,7 @@ job_retry:
   max_attempts: 3          # Maximum retry attempts
   max_delay: 3600          # Maximum delay (1 hour)
 
-# Pipeline steps - two-step ETL with single-level batching
+# Pipeline steps - three-step ETL with dependencies
 steps:
   # Step 1: Extract from Trino in batches of 10
   - name: extract
@@ -35,6 +35,7 @@ steps:
   - name: load
     executor: trino_load
     inputs: ["df"]
+    depends_on: ["extract"]  # Explicit dependency on extract step
     concurrency_key: "trino_writes"  # Limit concurrent Trino writes
     config:
       host: trino-6f3317f2-trino.trino.svc.cluster.local
@@ -44,3 +45,13 @@ steps:
       target_schema: test
       target_table: test_d
       recreate_table: true  # Only recreates on very first batch
+
+  # Step 3: Validate data quality (depends on load completion)
+  - name: validate
+    executor: trino_extract
+    depends_on: ["load"]  # Must wait for load to complete
+    config:
+      host: trino-6f3317f2-trino.trino.svc.cluster.local
+      port: 8080
+      user: dagster
+      select_query: SELECT COUNT(*) as row_count FROM lakehouse.test.test_d

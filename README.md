@@ -104,12 +104,13 @@ asset_key: ["lakehouse", "test", "table_name"]
 depends_on:
   - ["lakehouse", "test", "upstream_table"]
 
-# Pipeline steps (execute in order)
+# Pipeline steps (execute in dependency order)
 steps:
   - name: step_name
     executor: executor_name
-    inputs: ["input_name"]   # Optional: data from previous step
-    outputs: ["output_name"]  # Optional: data for next step
+    inputs: ["input_name"]        # Optional: data from previous step
+    outputs: ["output_name"]       # Optional: data for next step
+    depends_on: ["other_step"]     # Optional: steps this step depends on
     config:
       # Executor-specific configuration
       ...
@@ -204,6 +205,36 @@ steps:
     concurrency_key: "trino_writes"  # Limits concurrent Trino writes
     config: ...
 ```
+
+### Step Dependencies
+
+**Multi-step pipelines support complex dependency graphs:**
+
+```yaml
+steps:
+  # Independent steps execute in parallel (when possible)
+  - name: extract_users
+    executor: trino_extract
+    outputs: ["users_df"]
+
+  - name: extract_orders
+    executor: trino_extract
+    outputs: ["orders_df"]
+
+  # Dependent steps wait for their dependencies
+  - name: join_data
+    executor: trino_load
+    inputs: ["users_df", "orders_df"]
+    depends_on: ["extract_users", "extract_orders"]  # Explicit dependencies
+    config:
+      # Join logic here
+```
+
+**Dependency Resolution:**
+- Steps without dependencies execute first
+- Topological sort ensures proper execution order
+- Circular dependencies are detected and rejected
+- Steps can depend on multiple other steps
 
 ### Available Executors
 

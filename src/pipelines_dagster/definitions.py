@@ -1,8 +1,9 @@
 """Shared utilities for dynamically generating Dagster definitions from YAML."""
 
 import os
+from collections import defaultdict, deque
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Dict, List
 
 import yaml
 from dagster import (
@@ -32,6 +33,68 @@ from pipelines_dagster.ops.trino_extract import (
     trino_load_op,
 )
 from pipelines_dagster.sensors import create_job_retry_sensor
+
+
+def resolve_step_dependencies(steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Resolve step dependencies and return steps in execution order.
+
+    Uses topological sort to handle dependencies between steps.
+    Steps without dependencies or with resolved dependencies execute first.
+
+    Args:
+        steps: List of step configurations from YAML
+
+    Returns:
+        Steps in dependency-resolved execution order
+
+    Raises:
+        ValueError: If circular dependencies are detected
+    """
+    # Create step name to index mapping
+    step_indices = {step["name"]: i for i, step in enumerate(steps)}
+
+    # Build dependency graph
+    graph = defaultdict(list)  # step -> list of steps that depend on it
+    in_degree = {step["name"]: 0 for step in steps}
+
+    for step in steps:
+        step_name = step["name"]
+        depends_on = step.get("depends_on", [])
+
+        for dep in depends_on:
+            if dep not in step_indices:
+                raise ValueError(f"Step '{step_name}' depends on unknown step '{dep}'")
+            graph[dep].append(step_name)
+            in_degree[step_name] += 1
+
+    # Topological sort using Kahn's algorithm
+    queue = deque([name for name, degree in in_degree.items() if degree == 0])
+    result = []
+    processed = set()
+
+    while queue:
+        current_step_name = queue.popleft()
+        if current_step_name in processed:
+            continue
+        processed.add(current_step_name)
+
+        # Find the step config
+        step_config = next(step for step in steps if step["name"] == current_step_name)
+        result.append(step_config)
+
+        # Update dependencies
+        for dependent in graph[current_step_name]:
+            in_degree[dependent] -= 1
+            if in_degree[dependent] == 0:
+                queue.append(dependent)
+
+    # Check for circular dependencies
+    if len(result) != len(steps):
+        remaining = set(step["name"] for step in steps) - processed
+        raise ValueError(f"Circular dependency detected involving steps: {remaining}")
+
+    return result
 from pipelines_dagster.ops.trino_to_s3 import trino_to_s3_op
 
 # Base directory containing pipeline YAML configurations
@@ -307,8 +370,11 @@ def make_asset_for_pipeline(job_name: str, config: dict):
     if not steps:
         raise ValueError(f"No steps defined in config for job: {job_name}")
 
+    # Resolve step dependencies for execution order
+    resolved_steps = resolve_step_dependencies(steps)
+
     # All pipelines (single or multi-step, batched or non-batched) handled by unified engine
-    return make_graph_asset_from_steps(job_name, asset_key, dep_keys, steps)
+    return make_graph_asset_from_steps(job_name, asset_key, dep_keys, resolved_steps)
 
 
 def generate_definitions_for_workspace(workspace_name: str) -> Definitions:
