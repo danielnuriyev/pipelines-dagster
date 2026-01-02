@@ -31,11 +31,28 @@ steps:
         base_delay: 3.0   # Wait 3s, 6s, 12s, 24s, 48s
         max_delay: 60.0   # Cap delay at 60 seconds
 
-  # Step 2: Load each batch into test_d
+  # Step 2: Transform data using DuckDB SQL
+  - name: transform
+    executor: duckdb_sql
+    inputs: ["df"]
+    outputs: ["transformed_df"]
+    depends_on: ["extract"]  # Depends on extract step
+    concurrency_key: "data_processing"  # Limit concurrent data processing
+    config:
+      sql_query: |
+        SELECT
+          id,
+          ts,
+          -- Add some transformations
+          CASE WHEN id % 2 = 0 THEN 'even' ELSE 'odd' END as parity,
+        FROM input_df
+        WHERE id <= 50  -- Filter to first 50 records
+
+  # Step 3: Load transformed data into test_d
   - name: load
     executor: trino_load
-    inputs: ["df"]
-    depends_on: ["extract"]  # Explicit dependency on extract step
+    inputs: ["transformed_df"]
+    depends_on: ["transform"]  # Depends on transform step
     concurrency_key: "trino_writes"  # Limit concurrent Trino writes
     config:
       host: trino-6f3317f2-trino.trino.svc.cluster.local

@@ -26,6 +26,7 @@ from dagster import (
 )
 
 from pipelines_dagster.ops.batch_splitter import batch_splitter_op
+from pipelines_dagster.ops.duckdb_sql import duckdb_sql_op
 from pipelines_dagster.ops.s3_to_trino import s3_to_trino_op
 from pipelines_dagster.ops.trino_insert_select import trino_insert_select_op
 from pipelines_dagster.ops.trino_extract import (
@@ -111,6 +112,7 @@ EXECUTOR_FUNCTIONS: dict[str, Callable[[OpExecutionContext, dict], Any]] = {
     "trino_extract": trino_extract_op,
     "trino_load": trino_load_op,
     "batch_splitter": batch_splitter_op,
+    "duckdb_sql": duckdb_sql_op,
 }
 
 

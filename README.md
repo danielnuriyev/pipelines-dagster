@@ -244,6 +244,19 @@ steps:
 - **`trino_to_s3`**: Query Trino and export results to S3 as CSV
 - **`s3_to_trino`**: Load CSV from S3 into Trino table
 - **`batch_splitter`**: Subdivide a DataFrame into smaller batches
+- **`duckdb_sql`**: Execute SQL queries on DataFrames using DuckDB
+
+    ```yaml
+    - name: transform
+      executor: duckdb_sql
+      inputs: ["input_df"]
+      outputs: ["output_df"]
+      config:
+        sql_query: |
+          SELECT column1, column2, column1 + column2 as sum_col
+          FROM input_df
+          WHERE column1 > 10
+    ```
 
 
 
