@@ -80,14 +80,19 @@ pipelines-dagster/
 │           ├── trino_insert_select.py
 │           ├── trino_to_s3.py
 │           ├── s3_to_trino.py
-│           └── trino_pandas_etl.py
+│           ├── trino_pandas_etl.py
+│           ├── batch_splitter.py  # Nested batching executor
+│           └── batch_utils.py    # Generic batching utilities
 ├── pipelines/
 │   ├── trino/                   # Trino workspace pipelines
 │   │   ├── test_trino_to_trino.yaml
 │   │   ├── test_trino_to_s3.yaml
-│   │   └── test_trino_pandas_etl.yaml
+│   │   ├── test_trino_pandas_etl.yaml
+│   │   └── test_batch_at_load.yaml
 │   └── s3/                      # S3 workspace pipelines
 │       └── test_s3_to_trino.yaml
+├── scripts/
+│   └── populate_test_a.py       # Utility script for test data
 ├── tests/
 │   └── integration/
 │       └── test_full_pipeline.py  # Comprehensive end-to-end test
@@ -98,6 +103,95 @@ pipelines-dagster/
 ├── .yamllint.yaml
 └── README.md
 ```
+
+## Pipeline Configuration
+
+Pipelines are defined in YAML files under the `pipelines/` directory. Each pipeline can have multiple steps that are executed in sequence.
+
+### Basic Structure
+
+```yaml
+# Asset this pipeline produces
+asset_key: ["lakehouse", "test", "table_name"]
+
+# Dependencies (other assets this depends on)
+depends_on:
+  - ["lakehouse", "test", "upstream_table"]
+
+# Pipeline steps (execute in order)
+steps:
+  - name: step_name
+    executor: executor_name
+    inputs: ["input_name"]   # Optional: data from previous step
+    outputs: ["output_name"]  # Optional: data for next step
+    config:
+      # Executor-specific configuration
+      ...
+
+# Optional: Schedule (cron expression)
+schedule: "* * * * *"  # Run every minute
+```
+
+### Batching
+
+**Any step in a pipeline can be configured for batch processing**, and **multiple steps can batch** in a single pipeline, creating nested batching (fan-out at multiple levels). Add `batch_size` and `pk` (primary key) to a step's config:
+
+```yaml
+steps:
+  - name: extract
+    executor: trino_extract
+    outputs: ["df"]
+    config:
+      host: trino.example.com
+      port: 8080
+      user: dagster
+      select_query: SELECT * FROM large_table
+      batch_size: 1000  # Process 1000 rows at a time
+      pk: id           # Primary key for consistent batching
+
+  - name: load
+    executor: trino_load
+    inputs: ["df"]
+    config:
+      ...
+```
+
+#### How Batching Works
+
+When a step has batching enabled:
+- The step becomes a **batch generator** that yields data in chunks
+- All following steps process each batch independently
+- For steps with `recreate_table: true`, the table is only created/dropped on the **very first batch** (across all batching levels)
+- **Batching can occur at any step** and **multiple steps can batch**, creating nested execution
+
+#### Batching Examples
+
+**Single-level batching** (`test_trino_pandas_etl.yaml`):
+- Extract step batches Trino data into 10-row chunks
+- Load step processes each batch sequentially
+- Result: 10 batches × 1 execution per batch = 10 total executions
+
+**Nested batching** (`test_batch_at_load.yaml`):
+- Step 1 (extract): Batches Trino data into 10-row chunks
+- Step 2 (split): Each 10-row batch is subdivided into 1-row batches using `batch_splitter`
+- Step 3 (load): Each 1-row batch is loaded individually
+- Result: 10 batches × 10 sub-batches = 100 total load operations
+
+The nested batching pattern is useful for:
+- Fine-grained control over parallelization
+- Memory management (processing large batches through a transformation, then subdividing for final writes)
+- Rate limiting (controlling insert frequency to downstream systems)
+
+### Available Executors
+
+- **`trino_insert_select`**: Execute INSERT...SELECT in Trino
+- **`trino_extract`**: Extract data from Trino into pandas DataFrame (supports batching)
+- **`trino_load`**: Load pandas DataFrame into Trino table (supports batching)
+- **`trino_to_s3`**: Query Trino and export results to S3 as CSV
+- **`s3_to_trino`**: Load CSV from S3 into Trino table
+- **`batch_splitter`**: Subdivide a DataFrame into smaller batches (for nested batching)
+
+
 
 ## Local Development
 
