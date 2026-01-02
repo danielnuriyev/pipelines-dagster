@@ -66,43 +66,6 @@ uv sync --extra dev
 uv run pre-commit install
 ```
 
-## Project Structure
-
-```
-pipelines-dagster/
-├── src/
-│   └── pipelines_dagster/
-│       ├── __init__.py
-│       ├── definitions.py       # Shared pipeline generation logic
-│       ├── trino_defs.py        # Dagster definitions for trino workspace
-│       ├── s3_defs.py           # Dagster definitions for s3 workspace
-│       └── ops/                 # Pipeline executors
-│           ├── trino_insert_select.py
-│           ├── trino_to_s3.py
-│           ├── s3_to_trino.py
-│           ├── trino_pandas_etl.py
-│           ├── batch_splitter.py  # Nested batching executor
-│           └── batch_utils.py    # Generic batching utilities
-├── pipelines/
-│   ├── trino/                   # Trino workspace pipelines
-│   │   ├── test_trino_to_trino.yaml
-│   │   ├── test_trino_to_s3.yaml
-│   │   ├── test_trino_pandas_etl.yaml
-│   │   └── test_batch_at_load.yaml
-│   └── s3/                      # S3 workspace pipelines
-│       └── test_s3_to_trino.yaml
-├── scripts/
-│   └── populate_test_a.py       # Utility script for test data
-├── tests/
-│   └── integration/
-│       └── test_full_pipeline.py  # Comprehensive end-to-end test
-├── workspace.yaml               # Dagster workspace configuration
-├── Dockerfile
-├── pyproject.toml
-├── .pre-commit-config.yaml
-├── .yamllint.yaml
-└── README.md
-```
 
 ## Pipeline Configuration
 
@@ -132,64 +95,15 @@ steps:
 schedule: "* * * * *"  # Run every minute
 ```
 
-### Batching
-
-**Any step in a pipeline can be configured for batch processing**, and **multiple steps can batch** in a single pipeline, creating nested batching (fan-out at multiple levels). Add `batch_size` and `pk` (primary key) to a step's config:
-
-```yaml
-steps:
-  - name: extract
-    executor: trino_extract
-    outputs: ["df"]
-    config:
-      host: trino.example.com
-      port: 8080
-      user: dagster
-      select_query: SELECT * FROM large_table
-      batch_size: 1000  # Process 1000 rows at a time
-      pk: id           # Primary key for consistent batching
-
-  - name: load
-    executor: trino_load
-    inputs: ["df"]
-    config:
-      ...
-```
-
-#### How Batching Works
-
-When a step has batching enabled:
-- The step becomes a **batch generator** that yields data in chunks
-- All following steps process each batch independently
-- For steps with `recreate_table: true`, the table is only created/dropped on the **very first batch** (across all batching levels)
-- **Batching can occur at any step** and **multiple steps can batch**, creating nested execution
-
-#### Batching Examples
-
-**Single-level batching** (`test_trino_pandas_etl.yaml`):
-- Extract step batches Trino data into 10-row chunks
-- Load step processes each batch sequentially
-- Result: 10 batches × 1 execution per batch = 10 total executions
-
-**Nested batching** (`test_batch_at_load.yaml`):
-- Step 1 (extract): Batches Trino data into 10-row chunks
-- Step 2 (split): Each 10-row batch is subdivided into 1-row batches using `batch_splitter`
-- Step 3 (load): Each 1-row batch is loaded individually
-- Result: 10 batches × 10 sub-batches = 100 total load operations
-
-The nested batching pattern is useful for:
-- Fine-grained control over parallelization
-- Memory management (processing large batches through a transformation, then subdividing for final writes)
-- Rate limiting (controlling insert frequency to downstream systems)
-
 ### Available Executors
 
 - **`trino_insert_select`**: Execute INSERT...SELECT in Trino
-- **`trino_extract`**: Extract data from Trino into pandas DataFrame (supports batching)
-- **`trino_load`**: Load pandas DataFrame into Trino table (supports batching)
+- **`trino_extract`**: Extract data from Trino into pandas DataFrame
+- **`trino_load`**: Load pandas DataFrame into Trino table
 - **`trino_to_s3`**: Query Trino and export results to S3 as CSV
 - **`s3_to_trino`**: Load CSV from S3 into Trino table
-- **`batch_splitter`**: Subdivide a DataFrame into smaller batches (for nested batching)
+- **`batch_splitter`**: Subdivide a DataFrame into smaller batches
+
 
 
 
@@ -356,37 +270,52 @@ curl -s -X POST http://localhost:3000/graphql \
 
 The `ASSET` daemon must be healthy for auto-materialization to work.
 
-## Testing
+## Data Setup
 
-### Integration Tests
+### Populate Test Data
 
-The integration test (`test_full_pipeline.py`) performs a complete end-to-end verification:
-
-1. **Deploys code to Dagster** - Builds Docker image, loads to kind, restarts deployments
-2. **Disables test_trino_to_trino schedule** - Prevents scheduled runs during testing
-3. **Materializes test_trino_to_trino asset** - Creates `test_b` table from `test_a`
-4. **Verifies test_b data** - Confirms data in Trino
-5. **Waits for test_trino_to_s3 auto-materialization** - Triggered by test_b completion
-6. **Verifies S3 export** - Confirms CSV file in MinIO
-7. **Waits for test_s3_to_trino auto-materialization** - Triggered by S3 export
-8. **Verifies s3_data table** - Confirms data loaded back to Trino
-9. **Re-enables test_trino_to_trino schedule** - Restores normal operation
-
-**Prerequisites:**
-- Kind cluster running with Dagster and Trino deployed
-- Port-forwards set up for Dagster, Trino, and MinIO
+Before running tests, populate the `test_a` table with sample data:
 
 ```bash
-# Set up port-forwards
+# Populate test_a table with 100 records
+uv run python scripts/populate_trino.py
+
+# With custom connection settings
+uv run python scripts/populate_trino.py --host localhost --port 8080 --user dagster
+```
+
+This creates the `lakehouse.test.test_a` table with 100 records containing IDs and timestamps.
+
+## Testing
+
+### Run Integration Tests
+
+The integration test (`tests/integration/test_full_pipeline.py`) performs end-to-end verification of the entire pipeline:
+
+**What it tests:**
+1. Deploys updated code to Dagster
+2. Materializes the `test_trino_to_trino` asset
+3. Verifies cross-workspace auto-materialization (Trino → S3 → Trino)
+4. Confirms data integrity throughout the pipeline
+
+**Prerequisites:**
+- Running kind cluster with Dagster, Trino, and MinIO
+- Port-forwards established
+- Test data populated (run `populate_trino.py` first)
+
+**Run the test:**
+
+```bash
+# Set up port-forwards (run in background)
 kubectl port-forward svc/dagster-dagster-webserver -n dagster 3000:80 &
 kubectl port-forward svc/trino-6f3317f2-trino -n trino 8080:8080 &
 kubectl port-forward svc/minio-498506da -n trino 30900:9000 &
 
-# Get MinIO secret key
+# Get MinIO credentials
 export S3_SECRET_KEY=$(kubectl get secret minio-498506da -n trino -o jsonpath='{.data.rootPassword}' | base64 -d)
 
-# Run integration test
-S3_SECRET_KEY=$S3_SECRET_KEY uv run pytest tests/integration/ -v -s -m integration
+# Run the integration test
+S3_SECRET_KEY=$S3_SECRET_KEY uv run pytest tests/integration/test_full_pipeline.py -v -s
 ```
 
 **Environment variables:**
