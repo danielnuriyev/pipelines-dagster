@@ -10,10 +10,24 @@ import trino
 from dagster import OpExecutionContext
 
 
-def trino_extract_op(context: OpExecutionContext, config: dict) -> pd.DataFrame:
-    """Step 1: Extract data from Trino source table into pandas DataFrame."""
+def trino_extract_op(context: OpExecutionContext, config: dict):
+    """
+    Extract data from Trino source table.
+    
+    If batch_size and pk are specified, returns a generator yielding (batch_key, DataFrame) tuples.
+    Otherwise, returns a single DataFrame.
+    """
+    batch_size = config.get("batch_size")
+    pk_column = config.get("pk")
+    select_query = config["select_query"]
+    
     context.log.info(f"Connecting to Trino at {config['host']}:{config['port']}")
 
+    # If batching is requested, use batch generator
+    if batch_size is not None and pk_column is not None:
+        return _extract_batches(context, config)
+    
+    # Non-batched: fetch all data
     conn = trino.dbapi.connect(
         host=config["host"],
         port=config["port"],
@@ -21,7 +35,6 @@ def trino_extract_op(context: OpExecutionContext, config: dict) -> pd.DataFrame:
     )
     cursor = conn.cursor()
 
-    select_query = config["select_query"]
     context.log.info(f"Executing query: {select_query}")
     cursor.execute(select_query)
 
@@ -37,14 +50,11 @@ def trino_extract_op(context: OpExecutionContext, config: dict) -> pd.DataFrame:
     return df
 
 
-def trino_extract_batch_generator(context: OpExecutionContext, config: dict):
+def _extract_batches(context: OpExecutionContext, config: dict):
     """Generate DataFrames for each batch."""
     batch_size = config.get("batch_size")
     pk_column = config.get("pk")
     select_query = config["select_query"]
-
-    if batch_size is None or pk_column is None:
-        raise ValueError("batch_size and pk must be provided for batched extract")
 
     conn = trino.dbapi.connect(
         host=config["host"],
@@ -90,6 +100,15 @@ def trino_extract_batch_generator(context: OpExecutionContext, config: dict):
         current = upper
 
     conn.close()
+
+
+def trino_extract_batch_generator(context: OpExecutionContext, config: dict):
+    """
+    Deprecated: Use trino_extract_op instead. It now handles batching internally.
+    
+    This function is kept for backward compatibility but delegates to _extract_batches.
+    """
+    return _extract_batches(context, config)
 
 
 def trino_load_op(context: OpExecutionContext, config: dict, df: pd.DataFrame) -> None:
