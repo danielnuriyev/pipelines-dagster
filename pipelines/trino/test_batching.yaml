@@ -4,7 +4,7 @@ asset_key: ["lakehouse", "test", "test_d"]
 # Dependencies (asset keys this depends on)
 # depends_on: []
 
-# Pipeline steps - three-step ETL with nested batching
+# Pipeline steps - two-step ETL with single-level batching
 steps:
   # Step 1: Extract from Trino in batches of 10
   - name: extract
@@ -15,19 +15,10 @@ steps:
       port: 8080
       user: dagster
       select_query: SELECT * FROM lakehouse.test.test_a
-      batch_size: 10  # First level batching: 100 rows -> 10 batches of 10
+      batch_size: 10  # Single level batching: 100 rows -> 10 batches of 10
       pk: id
 
-  # Step 2: Split each batch of 10 into batches of 1
-  - name: split
-    executor: batch_splitter
-    inputs: ["df"]
-    outputs: ["df"]
-    config:
-      batch_size: 1  # Second level batching: 10 rows -> 10 batches of 1
-      pk: id
-
-  # Step 3: Load each batch of 1 into test_d
+  # Step 2: Load each batch into test_d
   - name: load
     executor: trino_load
     inputs: ["df"]

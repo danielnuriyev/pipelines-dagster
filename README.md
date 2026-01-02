@@ -265,22 +265,42 @@ PULUMI_CONFIG_PASSPHRASE="" pulumi up --yes
 When you only change pipeline code or YAML configs, you can skip Pulumi and just reload the workspace:
 
 ```bash
-# 1. Build and load the new image
+# 1. Build the new image
 docker build -t pipelines-dagster:latest .
+
+# 2. Load the image into kind cluster (replace <cluster-name> with your cluster, e.g., 'trino')
 kind load docker-image pipelines-dagster:latest --name <cluster-name>
 
-# 2. Restart user code deployments to pick up new image
-kubectl rollout restart deployment -n dagster -l app.kubernetes.io/name=dagster-user-deployments
+# 3. Delete user code deployment pods to pick up new image
+kubectl delete pods -n dagster -l app.kubernetes.io/name=dagster-user-deployments
 
-# 3. Wait for rollout to complete
-kubectl rollout status deployment -n dagster -l app.kubernetes.io/name=dagster-user-deployments
+# 4. Wait for pods to restart (about 20-30 seconds)
+sleep 25
 
-# 4. Reload Dagster workspace (optional, for immediate refresh)
-kubectl port-forward svc/dagster-dagster-webserver -n dagster 3000:80 &
+# 5. Reload Dagster workspace
+# (Assumes port-forward to localhost:3000 is already running)
 curl -s -X POST http://localhost:3000/graphql \
   -H "Content-Type: application/json" \
   -d '{"query":"mutation { reloadWorkspace { __typename } }"}'
 ```
+
+**One-liner for quick deployments (replace `<cluster-name>`):**
+
+```bash
+cd /path/to/pipelines-dagster && \
+docker build -t pipelines-dagster:latest . && \
+kind load docker-image pipelines-dagster:latest --name <cluster-name> && \
+kubectl delete pods -n dagster -l app.kubernetes.io/name=dagster-user-deployments && \
+sleep 25 && \
+curl -s -X POST http://localhost:3000/graphql -H "Content-Type: application/json" -d '{"query":"mutation { reloadWorkspace { __typename } }"}'
+```
+
+**Note:** 
+- Replace `<cluster-name>` with your kind cluster name (typically `trino` for this project)
+- If port-forward is not running, start it first:
+  ```bash
+  kubectl port-forward svc/dagster-dagster-webserver -n dagster 3000:80 &
+  ```
 
 ### Verify Deployment
 
