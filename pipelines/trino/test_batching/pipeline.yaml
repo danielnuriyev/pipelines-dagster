@@ -39,14 +39,7 @@ steps:
     depends_on: ["extract"]  # Depends on extract step
     concurrency_key: "data_processing"  # Limit concurrent data processing
     config:
-      sql_query: |
-        SELECT
-          id,
-          ts,
-          -- Add some transformations
-          CASE WHEN id % 2 = 0 THEN 'even' ELSE 'odd' END as parity,
-        FROM input_df
-        WHERE id <= 50  -- Filter to first 50 records
+      sql_file: transform_data.sql  # Load SQL from same directory
 
   # Step 3: Load transformed data into test_d
   - name: load

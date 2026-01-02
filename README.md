@@ -92,7 +92,7 @@ uv run pre-commit install
 
 ## Pipeline Configuration
 
-Pipelines are defined in YAML files under the `pipelines/` directory. Each pipeline can have multiple steps that are executed in sequence.
+Pipelines are defined in YAML files under the `pipelines/` directory. Each pipeline resides in its own subdirectory with `pipeline.yaml` and any associated SQL files co-located for better organization.
 
 ### Basic Structure
 
@@ -112,7 +112,10 @@ steps:
     outputs: ["output_name"]       # Optional: data for next step
     depends_on: ["other_step"]     # Optional: steps this step depends on
     config:
-      # Executor-specific configuration
+      # SQL can be specified inline or from file:
+      sql_query: SELECT * FROM table  # Inline SQL
+      sql_file: sql/my_query.sql     # SQL from file
+      # Other executor-specific configuration
       ...
 
 # Optional: Schedule (cron expression)
@@ -247,6 +250,7 @@ steps:
 - **`duckdb_sql`**: Execute SQL queries on DataFrames using DuckDB
 
     ```yaml
+    # Inline SQL
     - name: transform
       executor: duckdb_sql
       inputs: ["input_df"]
@@ -256,6 +260,54 @@ steps:
           SELECT column1, column2, column1 + column2 as sum_col
           FROM input_df
           WHERE column1 > 10
+
+    # SQL from file (relative to pipeline directory)
+    - name: transform
+      executor: duckdb_sql
+      inputs: ["input_df"]
+      outputs: ["output_df"]
+      config:
+        sql_file: transform_data.sql
+    ```
+
+- **`trino_extract`**: Extract data from Trino into pandas DataFrame
+
+    ```yaml
+    # Inline SQL
+    - name: extract
+      executor: trino_extract
+      outputs: ["df"]
+      config:
+        select_query: SELECT * FROM my_table WHERE active = true
+
+    # SQL from file (relative to pipeline directory)
+    - name: extract
+      executor: trino_extract
+      outputs: ["df"]
+      config:
+        sql_file: extract_active_users.sql
+    ```
+
+- **`trino_insert_select`**: Execute INSERT...SELECT in Trino
+
+    ```yaml
+    # Inline SQL
+    - name: load
+      executor: trino_insert_select
+      config:
+        select_query: SELECT * FROM source_table
+        target_catalog: lakehouse
+        target_schema: test
+        target_table: target_table
+
+    # SQL from file (relative to pipeline directory)
+    - name: load
+      executor: trino_insert_select
+      config:
+        sql_file: load_transformed_data.sql
+        target_catalog: lakehouse
+        target_schema: test
+        target_table: target_table
     ```
 
 
@@ -286,7 +338,7 @@ uv run ruff format src/
 ### YAML (yamllint)
 
 ```bash
-# Lint YAML files
+# Lint all YAML files recursively
 uv run yamllint pipelines/
 ```
 

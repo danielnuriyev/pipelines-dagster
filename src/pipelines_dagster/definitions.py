@@ -120,10 +120,28 @@ def load_pipeline_configs_from_dir(directory: Path) -> dict[str, dict]:
     """Load all pipeline configurations from YAML files in a directory."""
     configs = {}
     if directory.exists():
+        # Look for pipeline.yaml files in subdirectories (new structure)
+        for subdir in directory.iterdir():
+            if subdir.is_dir():
+                pipeline_yaml = subdir / "pipeline.yaml"
+                if pipeline_yaml.exists():
+                    name = subdir.name
+                    with open(pipeline_yaml) as f:
+                        config = yaml.safe_load(f)
+                        # Add pipeline directory info for SQL file resolution
+                        config["_pipeline_dir"] = subdir
+                        configs[name] = config
+
+        # Also check for *.yaml files directly in directory (legacy support)
         for yaml_file in directory.glob("*.yaml"):
             name = yaml_file.stem
-            with open(yaml_file) as f:
-                configs[name] = yaml.safe_load(f)
+            if name not in configs:  # Don't overwrite if already loaded from subdirectory
+                with open(yaml_file) as f:
+                    config = yaml.safe_load(f)
+                    # For legacy files, pipeline_dir is the parent directory
+                    config["_pipeline_dir"] = directory
+                    configs[name] = config
+
     return configs
 
 
@@ -371,6 +389,12 @@ def make_asset_for_pipeline(job_name: str, config: dict):
     steps = config.get("steps", [])
     if not steps:
         raise ValueError(f"No steps defined in config for job: {job_name}")
+
+    # Add pipeline directory info to steps for SQL file resolution
+    pipeline_dir = config.get("_pipeline_dir")
+    for step in steps:
+        if pipeline_dir:
+            step["_pipeline_dir"] = pipeline_dir
 
     # Resolve step dependencies for execution order
     resolved_steps = resolve_step_dependencies(steps)
