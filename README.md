@@ -247,6 +247,18 @@ steps:
 - **`trino_to_s3`**: Query Trino and export results to S3 as CSV
 - **`s3_to_trino`**: Load CSV from S3 into Trino table
 - **`batch_splitter`**: Subdivide a DataFrame into smaller batches
+- **`batch_fan_in`**: Pass DataFrames through unchanged (placeholder for future fan-in functionality)
+
+    ```yaml
+    # Simple pass-through operation
+    - name: fan_in_step
+      executor: batch_fan_in
+      inputs: ["input_data"]
+      outputs: ["output_data"]
+    ```
+
+    **Note**: Currently passes data through unchanged. True fan-in (collecting results from multiple parallel batches) would require `.collect()` operations on dynamic outputs, which the current pipeline architecture doesn't support yet.
+
 - **`duckdb_sql`**: Execute SQL queries on DataFrames using DuckDB
 
     ```yaml
@@ -382,7 +394,12 @@ PULUMI_CONFIG_PASSPHRASE="" pulumi up --yes
 
 ### Code-only Deployment (update pipelines without Pulumi)
 
-When you only change pipeline code or YAML configs, you can skip Pulumi and just reload the workspace:
+When you only change pipeline code or YAML configs, you can skip Pulumi and just reload the workspace.
+
+If port-forward is not running, start it first:
+```bash
+kubectl port-forward svc/dagster-dagster-webserver -n dagster 3000:80 &
+```
 
 ```bash
 # 1. Build the new image
@@ -417,10 +434,6 @@ curl -s -X POST http://localhost:3000/graphql -H "Content-Type: application/json
 
 **Note:** 
 - Replace `<cluster-name>` with your kind cluster name (typically `trino` for this project)
-- If port-forward is not running, start it first:
-  ```bash
-  kubectl port-forward svc/dagster-dagster-webserver -n dagster 3000:80 &
-  ```
 
 ### Verify Deployment
 

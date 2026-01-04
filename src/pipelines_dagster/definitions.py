@@ -25,6 +25,7 @@ from dagster import (
     op,
 )
 
+from pipelines_dagster.ops.batch_fan_in import batch_fan_in_op
 from pipelines_dagster.ops.batch_splitter import batch_splitter_op
 from pipelines_dagster.ops.duckdb_sql import duckdb_sql_op
 from pipelines_dagster.ops.s3_to_trino import s3_to_trino_op
@@ -112,6 +113,7 @@ EXECUTOR_FUNCTIONS: dict[str, Callable[[OpExecutionContext, dict], Any]] = {
     "trino_extract": trino_extract_op,
     "trino_load": trino_load_op,
     "batch_splitter": batch_splitter_op,
+    "batch_fan_in": batch_fan_in_op,
     "duckdb_sql": duckdb_sql_op,
 }
 
@@ -164,6 +166,7 @@ def create_op_for_step(step_name: str, executor_func: Callable, step_config: dic
     op_tags = {}
     if concurrency_key:
         op_tags["dagster/concurrency_key"] = concurrency_key
+
 
     if is_batching:
         # Batching op: produces DynamicOut

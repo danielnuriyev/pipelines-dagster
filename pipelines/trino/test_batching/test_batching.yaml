@@ -41,11 +41,18 @@ steps:
     config:
       sql_file: transform_data.sql  # Load SQL from same directory
 
-  # Step 3: Load transformed data into test_d
+  # Step 3: Fan-in transformed batches
+  - name: fan_in
+    executor: batch_fan_in
+    inputs: ["transformed_df"]
+    outputs: ["combined_data"]
+    depends_on: ["transform"]
+
+  # Step 4: Load combined data into test_d
   - name: load
     executor: trino_load
-    inputs: ["transformed_df"]
-    depends_on: ["transform"]  # Depends on transform step
+    inputs: ["combined_data"]
+    depends_on: ["fan_in"]  # Depends on fan_in step
     concurrency_key: "trino_writes"  # Limit concurrent Trino writes
     config:
       host: trino-6f3317f2-trino.trino.svc.cluster.local
@@ -56,10 +63,10 @@ steps:
       target_table: test_d
       recreate_table: true  # Only recreates on very first batch
 
-  # Step 3: Validate data quality (depends on load completion)
+  # Step 5: Validate data quality (depends on load completion)
   - name: validate
     executor: trino_extract
-    depends_on: ["load"]  # Must wait for load to complete
+    depends_on: ["load"]  # Must wait for load completion
     config:
       host: trino-6f3317f2-trino.trino.svc.cluster.local
       port: 8080
