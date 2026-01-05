@@ -5,7 +5,7 @@ asset_key: ["lakehouse", "test", "test_b"]
 # depends_on: []
 
 # Schedule (cron expression) - runs every minute
-schedule: "* * * * *"
+# schedule: "* * * * *"
 
 # Pipeline steps
 steps:

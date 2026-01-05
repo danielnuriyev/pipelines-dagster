@@ -1,0 +1,61 @@
+# Asset this pipeline produces (S3 output as primary asset)
+asset_key: ["s3", "warehouse", "exports", "trino_targets_csv"]
+
+# Dependencies (asset keys this depends on)
+# depends_on: []
+
+# Job-level concurrency (max concurrent ops in this job)
+job_concurrency: 1
+
+# Job retry configuration
+job_retry:
+  max_attempts: 3          # Maximum retry attempts
+  max_delay: 3600          # Maximum delay (1 hour)
+
+# Pipeline steps - extract from Trino, load to both Trino and S3
+steps:
+  # Step 1: Extract from Trino (no batching)
+  - name: extract
+    executor: trino_extract
+    outputs: ["df"]
+    concurrency_key: "trino_reads"  # Limit concurrent Trino reads
+    config:
+      host: trino-0a966bea-trino.trino.svc.cluster.local
+      port: 8080
+      user: dagster
+      select_query: SELECT * FROM lakehouse.test.test_a
+      retry:  # Custom retry configuration
+        max_attempts: 3  # Try up to 3 times
+        base_delay: 1.0   # Wait 1s, 2s, 4s
+        max_delay: 60.0   # Cap delay at 60 seconds
+
+  # Step 2: Load data into Trino table (parallel with S3 load)
+  - name: load_trino
+    executor: trino_load
+    inputs: ["df"]
+    depends_on: ["extract"]  # Depends on extract step
+    concurrency_key: "trino_writes"  # Limit concurrent Trino writes
+    config:
+      host: trino-0a966bea-trino.trino.svc.cluster.local
+      port: 8080
+      user: dagster
+      target_catalog: lakehouse
+      target_schema: test
+      target_table: test_f
+      retry:  # Custom retry configuration
+        max_attempts: 3  # Try up to 3 times
+        base_delay: 1.0   # Wait 1s, 2s, 4s
+        max_delay: 60.0   # Cap delay at 60 seconds
+
+  # Step 3: Load data to S3 (parallel with Trino load)
+  - name: load_s3
+    executor: dataframe_to_s3
+    inputs: ["df"]
+    depends_on: ["extract"]  # Also depends on extract step
+    concurrency_key: "s3_writes"  # Limit concurrent S3 writes
+    config:
+      s3_endpoint: http://minio-498506da.trino.svc.cluster.local:9000
+      s3_bucket: warehouse
+      s3_key: exports/trino_targets.csv
+      s3_access_key: admin
+      # s3_secret_key is provided via environment variable S3_SECRET_KEY

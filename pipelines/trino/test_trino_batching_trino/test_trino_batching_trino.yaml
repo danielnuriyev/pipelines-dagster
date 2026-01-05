@@ -14,7 +14,7 @@ job_retry:
 
 # Pipeline steps - three-step ETL with dependencies
 steps:
-  # Step 1: Extract from Trino in batches of 10
+  # Step 1: Extract from Trino in batches
   - name: extract
     executor: trino_extract
     outputs: ["df"]
@@ -31,11 +31,21 @@ steps:
         base_delay: 1.0   # Wait 3s, 6s, 12s, 24s, 48s
         max_delay: 60.0   # Cap delay at 60 seconds
 
-  # Step 4: Load combined data into test_d
+  # Step 2: Transform data using DuckDB SQL
+  - name: transform
+    executor: duckdb_sql
+    inputs: ["df"]
+    outputs: ["transformed_df"]
+    depends_on: ["extract"]  # Depends on extract step
+    concurrency_key: "data_processing"  # Limit concurrent data processing
+    config:
+      sql_file: transform_data.sql  # Load SQL from same directory
+
+  # Step 3: Load transformed data into test_d
   - name: load
     executor: trino_load
-    inputs: ["df"]
-    depends_on: ["extract"]  # Depends on extract step
+    inputs: ["transformed_df"]
+    depends_on: ["transform"]  # Depends on transform step
     concurrency_key: "trino_writes"  # Limit concurrent Trino writes
     config:
       host: trino-0a966bea-trino.trino.svc.cluster.local

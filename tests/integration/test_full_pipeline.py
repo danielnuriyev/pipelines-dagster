@@ -56,7 +56,7 @@ ASSET_TRINO_EXPORT = ["s3", "warehouse", "exports", "trino_export_csv"]
 ASSET_S3_DATA = ["lakehouse", "test", "s3_data"]
 
 # Schedule name
-TEST_TRINO_TO_TRINO_SCHEDULE = "test_trino_to_trino_schedule"
+TEST_TRINO_TO_TRINO_SCHEDULE = "test_trino_insert_select_schedule"
 
 # Timeout settings
 MAX_WAIT_SECONDS = 180
@@ -539,32 +539,32 @@ def test_full_pipeline_chain(test_environment):
     # Record timestamp before starting
     before_test = time.time()
 
-    # Step 1: Stop the test_trino_to_trino schedule
-    print("\n--- Step 1: Stop test_trino_to_trino schedule ---")
+    # Step 1: Stop the test_trino_insert_select schedule
+    print("\n--- Step 1: Stop test_trino_insert_select schedule ---")
     stopped = stop_schedule(TEST_TRINO_TO_TRINO_SCHEDULE)
     print(f"Schedule stopped: {stopped}")
     # Don't assert - schedule might already be stopped
 
     try:
-        # Step 2: Materialize test_trino_to_trino asset (produces test_b)
-        print("\n--- Step 2: Materialize test_trino_to_trino asset ---")
+        # Step 2: Materialize test_trino_insert_select asset (produces test_b)
+        print("\n--- Step 2: Materialize test_trino_insert_select asset ---")
         run_id = materialize_asset(ASSET_TEST_B, TRINO_LOCATION)
         print(f"Launched materialization run: {run_id}")
 
         status = wait_for_run_completion(run_id)
-        assert status == "SUCCESS", f"test_trino_to_trino materialization failed with status: {status}"
-        print("test_trino_to_trino materialization completed successfully!")
+        assert status == "SUCCESS", f"test_trino_insert_select materialization failed with status: {status}"
+        print("test_trino_insert_select materialization completed successfully!")
 
         # Step 3: Verify test_b data
         print("\n--- Step 3: Verify test_b data ---")
         rows = verify_table_data("test_b", expected_row_count=2)
         print(f"Found {len(rows)} rows in test_b: {rows}")
 
-        # Step 4: Wait for auto-materialization of test_trino_to_s3
-        print("\n--- Step 4: Wait for test_trino_to_s3 auto-materialization ---")
+        # Step 4: Wait for auto-materialization of test_trino_s3
+        print("\n--- Step 4: Wait for test_trino_s3 auto-materialization ---")
         status = wait_for_asset_materialization(ASSET_TRINO_EXPORT, before_test)
-        assert status == "SUCCESS", f"test_trino_to_s3 failed with status: {status}"
-        print("test_trino_to_s3 completed successfully!")
+        assert status == "SUCCESS", f"test_trino_s3 failed with status: {status}"
+        print("test_trino_s3 completed successfully!")
 
         # Step 5: Verify S3 export data
         print("\n--- Step 5: Verify S3 export data ---")
@@ -587,8 +587,8 @@ def test_full_pipeline_chain(test_environment):
         print("=" * 60)
 
     finally:
-        # Step 8: Re-enable test_trino_to_trino schedule
-        print("\n--- Step 8: Re-enable test_trino_to_trino schedule ---")
+        # Step 8: Re-enable test_trino_insert_select schedule
+        print("\n--- Step 8: Re-enable test_trino_insert_select schedule ---")
         started = start_schedule(TEST_TRINO_TO_TRINO_SCHEDULE)
         print(f"Schedule re-enabled: {started}")
 

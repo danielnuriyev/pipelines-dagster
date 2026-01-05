@@ -1,0 +1,48 @@
+# Asset this pipeline produces
+asset_key: ["lakehouse", "test", "test_c"]
+
+# Dependencies (asset keys this depends on)
+# depends_on: []
+
+# Job-level concurrency (max concurrent ops in this job)
+job_concurrency: 1
+
+# Job retry configuration
+job_retry:
+  max_attempts: 3          # Maximum retry attempts
+  max_delay: 3600          # Maximum delay (1 hour)
+
+# Pipeline steps - extract from Trino and load to Trino
+steps:
+  # Step 1: Extract from Trino (no batching)
+  - name: extract
+    executor: trino_extract
+    outputs: ["df"]
+    concurrency_key: "trino_reads"  # Limit concurrent Trino reads
+    config:
+      host: trino-0a966bea-trino.trino.svc.cluster.local
+      port: 8080
+      user: dagster
+      select_query: SELECT * FROM lakehouse.test.test_a
+      retry:  # Custom retry configuration
+        max_attempts: 3  # Try up to 3 times
+        base_delay: 1.0   # Wait 1s, 2s, 4s
+        max_delay: 60.0   # Cap delay at 60 seconds
+
+  # Step 2: Load data into test_c
+  - name: load
+    executor: trino_load
+    inputs: ["df"]
+    depends_on: ["extract"]  # Depends on extract step
+    concurrency_key: "trino_writes"  # Limit concurrent Trino writes
+    config:
+      host: trino-0a966bea-trino.trino.svc.cluster.local
+      port: 8080
+      user: dagster
+      target_catalog: lakehouse
+      target_schema: test
+      target_table: test_c
+      retry:  # Custom retry configuration
+        max_attempts: 3  # Try up to 3 times
+        base_delay: 1.0   # Wait 1s, 2s, 4s
+        max_delay: 60.0   # Cap delay at 60 seconds

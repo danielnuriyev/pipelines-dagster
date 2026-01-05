@@ -97,7 +97,7 @@ def resolve_step_dependencies(steps: List[Dict[str, Any]]) -> List[Dict[str, Any
         raise ValueError(f"Circular dependency detected involving steps: {remaining}")
 
     return result
-from pipelines_dagster.ops.trino_to_s3 import trino_to_s3_op
+from pipelines_dagster.ops.trino_to_s3 import trino_to_s3_op, dataframe_to_s3_op
 
 # Base directory containing pipeline YAML configurations
 # Use relative path when running locally, absolute path in Docker
@@ -109,6 +109,7 @@ PIPELINES_BASE_DIR = Path(os.environ.get("PIPELINES_CONFIG_DIR", default_path))
 EXECUTOR_FUNCTIONS: dict[str, Callable[[OpExecutionContext, dict], Any]] = {
     "trino_insert_select": trino_insert_select_op,
     "trino_to_s3": trino_to_s3_op,
+    "dataframe_to_s3": dataframe_to_s3_op,
     "s3_to_trino": s3_to_trino_op,
     "trino_extract": trino_extract_op,
     "trino_load": trino_load_op,

@@ -7,13 +7,22 @@ depends_on:
 
 # Pipeline steps
 steps:
-  - name: export
-    executor: trino_to_s3
+  # Step 1: Extract from Trino that returns dataframes
+  - name: extract
+    executor: trino_extract
+    outputs: ["df"]
     config:
       host: trino-0a966bea-trino.trino.svc.cluster.local
       port: 8080
       user: dagster
       select_query: "SELECT * FROM lakehouse.test.test_a"
+
+  # Step 2: Load into S3
+  - name: load
+    executor: dataframe_to_s3
+    inputs: ["df"]
+    depends_on: ["extract"]
+    config:
       s3_endpoint: http://minio-498506da.trino.svc.cluster.local:9000
       s3_bucket: warehouse
       s3_key: exports/trino_export.csv

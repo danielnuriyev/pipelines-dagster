@@ -473,10 +473,10 @@ done
 Or start a specific schedule:
 
 ```bash
-# Start the test_trino_to_trino schedule (runs every minute)
+# Start the test_trino_insert_select schedule (runs every minute)
 curl -s -X POST http://localhost:3000/graphql \
   -H "Content-Type: application/json" \
-  -d '{"query":"mutation { startSchedule(scheduleSelector: {repositoryLocationName: \"trino\", repositoryName: \"__repository__\", scheduleName: \"test_trino_to_trino_schedule\"}) { ... on ScheduleStateResult { scheduleState { status } } } }"}'
+  -d '{"query":"mutation { startSchedule(scheduleSelector: {repositoryLocationName: \"trino\", repositoryName: \"__repository__\", scheduleName: \"test_trino_insert_select_schedule\"}) { ... on ScheduleStateResult { scheduleState { status } } } }"}'
 ```
 
 **Verify daemons are healthy:**
@@ -530,7 +530,7 @@ The integration test (`tests/integration/test_full_pipeline.py`) performs end-to
 
 **What it tests:**
 1. Deploys updated code to Dagster
-2. Materializes the `test_trino_to_trino` asset
+2. Materializes the `test_trino_insert_select` asset
 3. Verifies cross-workspace auto-materialization (Trino → S3 → Trino)
 4. Confirms data integrity throughout the pipeline
 
