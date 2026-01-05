@@ -329,7 +329,7 @@ steps:
 
 ```bash
 # Run Dagster dev server locally
-uv run dagster dev -m pipelines_dagster.definitions
+uv run dagster dev
 ```
 
 ## Linting
@@ -544,7 +544,7 @@ The integration test (`tests/integration/test_full_pipeline.py`) performs end-to
 ```bash
 # Set up port-forwards (run in background)
 kubectl port-forward svc/dagster-dagster-webserver -n dagster 3000:80 &
-kubectl port-forward svc/trino-6f3317f2-trino -n trino 8080:8080 &
+kubectl port-forward svc/trino-0a966bea-trino -n trino 8080:8080 &
 kubectl port-forward svc/minio-498506da -n trino 30900:9000 &
 
 # Get MinIO credentials

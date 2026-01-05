@@ -5,7 +5,7 @@ asset_key: ["lakehouse", "test", "test_d"]
 # depends_on: []
 
 # Job-level concurrency (max concurrent ops in this job)
-job_concurrency: 3
+job_concurrency: 1
 
 # Job retry configuration
 job_retry:
@@ -20,55 +20,31 @@ steps:
     outputs: ["df"]
     concurrency_key: "trino_reads"  # Limit concurrent Trino reads
     config:
-      host: trino-6f3317f2-trino.trino.svc.cluster.local
+      host: trino-0a966bea-trino.trino.svc.cluster.local
       port: 8080
       user: dagster
       select_query: SELECT * FROM lakehouse.test.test_a
-      batch_size: 10  # Single level batching: 100 rows -> 10 batches of 10
+      batch_size: 50
       pk: id
       retry:  # Custom retry configuration
-        max_attempts: 5  # Try up to 5 times instead of default 3
-        base_delay: 3.0   # Wait 3s, 6s, 12s, 24s, 48s
+        max_attempts: 3  # Try up to 5 times instead of default 3
+        base_delay: 1.0   # Wait 3s, 6s, 12s, 24s, 48s
         max_delay: 60.0   # Cap delay at 60 seconds
-
-  # Step 2: Transform data using DuckDB SQL
-  - name: transform
-    executor: duckdb_sql
-    inputs: ["df"]
-    outputs: ["transformed_df"]
-    depends_on: ["extract"]  # Depends on extract step
-    concurrency_key: "data_processing"  # Limit concurrent data processing
-    config:
-      sql_file: transform_data.sql  # Load SQL from same directory
-
-  # Step 3: Fan-in transformed batches
-  - name: fan_in
-    executor: batch_fan_in
-    inputs: ["transformed_df"]
-    outputs: ["combined_data"]
-    depends_on: ["transform"]
 
   # Step 4: Load combined data into test_d
   - name: load
     executor: trino_load
-    inputs: ["combined_data"]
-    depends_on: ["fan_in"]  # Depends on fan_in step
+    inputs: ["df"]
+    depends_on: ["extract"]  # Depends on extract step
     concurrency_key: "trino_writes"  # Limit concurrent Trino writes
     config:
-      host: trino-6f3317f2-trino.trino.svc.cluster.local
+      host: trino-0a966bea-trino.trino.svc.cluster.local
       port: 8080
       user: dagster
       target_catalog: lakehouse
       target_schema: test
       target_table: test_d
-      recreate_table: true  # Only recreates on very first batch
-
-  # Step 5: Validate data quality (depends on load completion)
-  - name: validate
-    executor: trino_extract
-    depends_on: ["load"]  # Must wait for load completion
-    config:
-      host: trino-6f3317f2-trino.trino.svc.cluster.local
-      port: 8080
-      user: dagster
-      select_query: SELECT COUNT(*) as row_count FROM lakehouse.test.test_d
+      retry:  # Custom retry configuration
+        max_attempts: 3  # Try up to 5 times instead of default 3
+        base_delay: 1.0   # Wait 3s, 6s, 12s, 24s, 48s
+        max_delay: 60.0   # Cap delay at 60 seconds

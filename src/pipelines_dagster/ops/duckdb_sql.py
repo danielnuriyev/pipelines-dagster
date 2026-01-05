@@ -36,19 +36,12 @@ def _load_sql_query(config: dict, context: OpExecutionContext) -> str:
         # Load from file
         sql_file_path = Path(sql_file)
 
-        # If relative path and we have pipeline directory, try same directory first
+        # If relative path and we have pipeline directory, resolve relative to pipeline directory
         pipeline_dir = config.get("_pipeline_dir")
         if not sql_file_path.is_absolute() and pipeline_dir:
-            candidate_path = pipeline_dir / sql_file
-            if candidate_path.exists():
-                sql_file_path = candidate_path
-            else:
-                # Fall back to old behavior: relative to pipelines directory
-                pipelines_dir = Path(__file__).parent.parent.parent / "pipelines"
-                sql_file_path = pipelines_dir / sql_file
-
-        # If still relative and no pipeline_dir, resolve relative to pipelines directory
-        if not sql_file_path.is_absolute():
+            sql_file_path = pipeline_dir / sql_file
+        elif not sql_file_path.is_absolute():
+            # Fall back to pipelines directory if no pipeline_dir available
             pipelines_dir = Path(__file__).parent.parent.parent / "pipelines"
             sql_file_path = pipelines_dir / sql_file
 

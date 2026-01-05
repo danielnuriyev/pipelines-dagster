@@ -122,12 +122,13 @@ def load_pipeline_configs_from_dir(directory: Path) -> dict[str, dict]:
     """Load all pipeline configurations from YAML files in a directory."""
     configs = {}
     if directory.exists():
-        # Look for pipeline.yaml files in subdirectories (new structure)
+        # Look for <dirname>.yaml files in subdirectories (new structure)
         for subdir in directory.iterdir():
             if subdir.is_dir():
-                pipeline_yaml = subdir / "pipeline.yaml"
+                dirname = subdir.name
+                pipeline_yaml = subdir / f"{dirname}.yaml"
                 if pipeline_yaml.exists():
-                    name = subdir.name
+                    name = dirname
                     with open(pipeline_yaml) as f:
                         config = yaml.safe_load(f)
                         # Add pipeline directory info for SQL file resolution
@@ -159,7 +160,10 @@ def create_op_for_step(step_name: str, executor_func: Callable, step_config: dic
     """
     has_inputs = step_config.get("inputs") is not None and len(step_config.get("inputs", [])) > 0
     has_outputs = step_config.get("outputs") is not None and len(step_config.get("outputs", [])) > 0
-    step_cfg = step_config.get("config", {})
+    step_cfg = step_config.get("config", {}).copy()
+    # Include pipeline directory for SQL file resolution
+    if "_pipeline_dir" in step_config:
+        step_cfg["_pipeline_dir"] = step_config["_pipeline_dir"]
 
     # Extract concurrency settings
     concurrency_key = step_config.get("concurrency_key")
@@ -255,8 +259,11 @@ def make_graph_asset_from_steps(
         if first_step["has_inputs"]:
             raise ValueError(f"First step '{first_step['name']}' should not have inputs")
 
-    # Use @graph_asset with .map() chaining for 0 or 1 batching steps
-    if batching_step_count <= 1:
+    # Check if any non-first step has no inputs (can't use .map() on them)
+    has_inputless_steps = any(not step["has_inputs"] for step in step_ops_list[1:])
+
+    # Use @graph_asset with .map() chaining for 0 or 1 batching steps and all steps have inputs
+    if batching_step_count <= 1 and not has_inputless_steps:
         # Create a final collect op for dynamic results
         @op(name=f"{job_name}_collect_final", ins={"data": In()})
         def collect_final_op(data):
@@ -284,8 +291,8 @@ def make_graph_asset_from_steps(
                     is_dynamic = step_info["is_batching"]
 
             # If final result is dynamic, collect it and pass to final op
-            if is_dynamic:
-                return collect_final_op(data.collect())
+            # if is_dynamic:
+            #    return collect_final_op(data.collect())
             # Otherwise, return the final data directly
             return data
 
@@ -398,6 +405,10 @@ def make_asset_for_pipeline(job_name: str, config: dict):
     for step in steps:
         if pipeline_dir:
             step["_pipeline_dir"] = pipeline_dir
+            # Also add to the config section so it gets passed to executors
+            if "config" not in step:
+                step["config"] = {}
+            step["config"]["_pipeline_dir"] = pipeline_dir
 
     # Resolve step dependencies for execution order
     resolved_steps = resolve_step_dependencies(steps)
@@ -467,10 +478,11 @@ def generate_definitions_for_workspace(workspace_name: str) -> Definitions:
         )
         schedules.append(schedule)
 
-    # Create sensors for pipelines with retry configuration
+    # Create sensors for pipelines with retry configuration (only if they have a schedule/job)
     for job_name, config in configs.items():
+        schedule_cron = config.get("schedule")
         retry_config = config.get("job_retry")
-        if retry_config:
+        if retry_config and schedule_cron:  # Only create sensor if job exists (created by schedule)
             retry_sensor = create_job_retry_sensor(job_name, config)
             sensors.append(retry_sensor)
 

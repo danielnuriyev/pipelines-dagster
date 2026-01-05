@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Populate test_a table with 100 records with different values.
+Populate the lakehouse.test.test_a table with 100 records with different values.
+Creates the test schema in lakehouse catalog if it does not exist.
 
 Usage:
-    python populate_test_a.py [--host HOST] [--port PORT] [--user USER]
+    uv run python populate_trino.py [--host HOST] [--port PORT] [--user USER]
 
 Example:
-    python populate_test_a.py --host localhost --port 8080 --user dagster
+    uv run python populate_trino.py --host localhost --port 8080 --user dagster
 """
 
 import argparse
@@ -30,6 +31,19 @@ def populate_test_a(host: str, port: int, user: str) -> None:
     target_full_name = f"{target_catalog}.{target_schema}.{target_table}"
 
     print(f"Populating {target_full_name} with 100 records...")
+
+    # Check if schema exists, if not create it
+    cursor.execute(f"""
+        SELECT schema_name FROM {target_catalog}.information_schema.schemata
+        WHERE catalog_name = '{target_catalog}'
+        AND schema_name = '{target_schema}'
+    """)
+    schema_exists = len(cursor.fetchall()) > 0
+
+    if not schema_exists:
+        print(f"Creating schema {target_catalog}.{target_schema}...")
+        cursor.execute(f"CREATE SCHEMA {target_catalog}.{target_schema}")
+        cursor.fetchall()
 
     # Check if table exists, if not create it
     cursor.execute(f"""

@@ -77,7 +77,7 @@ def trino_extract_op(context: OpExecutionContext, config: dict):
     Extract data from Trino source table.
 
     SQL can be specified either inline (select_query/sql_query) or from a file (sql_file).
-
+    
     If batch_size and pk are specified, returns a generator yielding (batch_key, DataFrame) tuples.
     Otherwise, returns a single DataFrame.
     """
@@ -94,10 +94,10 @@ def trino_extract_op(context: OpExecutionContext, config: dict):
     # Non-batched: fetch all data
     def connect_trino():
         return trino.dbapi.connect(
-            host=config["host"],
-            port=config["port"],
-            user=config["user"],
-        )
+        host=config["host"],
+        port=config["port"],
+        user=config["user"],
+    )
 
     retry_config = get_retry_config_from_yaml(config, "trino")
     try:
@@ -137,10 +137,10 @@ def _extract_batches(context: OpExecutionContext, config: dict):
 
     def connect_trino():
         return trino.dbapi.connect(
-            host=config["host"],
-            port=config["port"],
-            user=config["user"],
-        )
+        host=config["host"],
+        port=config["port"],
+        user=config["user"],
+    )
 
     retry_config = get_retry_config_from_yaml(config, "trino")
     try:

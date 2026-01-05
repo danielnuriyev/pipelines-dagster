@@ -10,7 +10,7 @@ steps:
   - name: export
     executor: trino_to_s3
     config:
-      host: trino-6f3317f2-trino.trino.svc.cluster.local
+      host: trino-0a966bea-trino.trino.svc.cluster.local
       port: 8080
       user: dagster
       select_query: "SELECT * FROM lakehouse.test.test_a"
