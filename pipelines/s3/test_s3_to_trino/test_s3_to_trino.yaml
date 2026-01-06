@@ -3,22 +3,22 @@ asset_key: ["lakehouse", "test", "test_s3_to_trino"]
 
 # Dependencies (asset keys this depends on) - CROSS-WORKSPACE dependency!
 depends_on:
-  - ["s3", "warehouse", "exports", "trino_export_csv"]
+  - ["s3", "{{ minio.bucket }}", "exports", "trino_export_csv"]
 
 # Pipeline steps
 steps:
   - name: load
     executor: s3_to_trino
     config:
-      s3_endpoint: http://minio-ec2bcee8.trino.svc.cluster.local:9000
-      s3_bucket: warehouse
+      s3_endpoint: http://{{ minio.host }}:{{ minio.port }}
+      s3_bucket: {{ minio.bucket }}
       s3_key: exports/trino_export.csv
-      s3_access_key: admin
+      s3_access_key: {{ minio.access_key }}
       # s3_secret_key is provided via environment variable S3_SECRET_KEY
-      host: trino-0a966bea-trino.trino.svc.cluster.local
-      port: 8080
-      user: dagster
-      target_catalog: lakehouse
-      target_schema: test
+      host: {{ trino.host }}
+      port: {{ trino.port }}
+      user: {{ trino.user }}
+      target_catalog: {{ trino.catalog }}
+      target_schema: {{ trino.schema }}
       target_table: test_s3_to_trino
       recreate_table: true  # Drop and recreate table on each run

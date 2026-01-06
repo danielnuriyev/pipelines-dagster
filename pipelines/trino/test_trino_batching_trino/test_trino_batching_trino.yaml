@@ -20,10 +20,10 @@ steps:
     outputs: ["df"]
     concurrency_key: "trino_reads"  # Limit concurrent Trino reads
     config:
-      host: trino-0a966bea-trino.trino.svc.cluster.local
-      port: 8080
-      user: dagster
-      select_query: SELECT * FROM lakehouse.test.test_a
+      host: {{ trino.host }}
+      port: {{ trino.port }}
+      user: {{ trino.user }}
+      select_query: SELECT * FROM {{ trino.catalog }}.{{ trino.schema }}.test_a
       batch_size: 50
       pk: id
       retry:  # Custom retry configuration
@@ -31,18 +31,18 @@ steps:
         base_delay: 1.0   # Wait 3s, 6s, 12s, 24s, 48s
         max_delay: 60.0   # Cap delay at 60 seconds
 
-  # Step 3: Load transformed data into test_d
+  # Step 3: Load transformed data into {{ trino.schema }}_d
   - name: load
     executor: trino_load
     inputs: ["df"]
     depends_on: ["extract"]  # Depends on transform step
     concurrency_key: "trino_writes"  # Limit concurrent Trino writes
     config:
-      host: trino-0a966bea-trino.trino.svc.cluster.local
-      port: 8080
-      user: dagster
-      target_catalog: lakehouse
-      target_schema: test
+      host: {{ trino.host }}
+      port: {{ trino.port }}
+      user: {{ trino.user }}
+      target_catalog: {{ trino.catalog }}
+      target_schema: {{ trino.schema }}
       target_table: test_trino_batching_trino
       retry:  # Custom retry configuration
         max_attempts: 3  # Try up to 5 times instead of default 3

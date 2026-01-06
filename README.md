@@ -99,45 +99,91 @@ uv run pre-commit install
 
 Pipelines are defined in YAML files under the `pipelines/` directory. Each pipeline resides in its own subdirectory with `pipeline.yaml` and any associated SQL files co-located for better organization.
 
-### Jinja2 Templating
+### Central Configuration & Jinja2 Templating
 
-Pipeline YAML files support **Jinja2 templating** for dynamic configuration. Any YAML file containing `{{ }}` syntax will be processed as a template. All environment variables are available as template variables:
+Pipeline configurations use **centralized configuration management** via `pipelines/config.yaml` combined with **Jinja2 templating** for dynamic configuration. All pipeline YAML files support full Jinja2 templating with access to configuration values and environment variables.
+
+**Configuration Structure:**
+```yaml
+# pipelines/config.yaml
+trino:
+  host: trino-0a966bea-trino.trino.svc.cluster.local
+  port: 8080
+  user: dagster
+  catalog: lakehouse
+  schema: test
+
+minio:
+  host: minio-ec2bcee8.trino.svc.cluster.local
+  port: 9000
+  bucket: warehouse
+  access_key: admin
+```
+
+**Jinja2 Template Usage:**
+Pipeline YAML files use standard Jinja2 syntax to access configuration values:
 
 ```yaml
 # pipelines/my_pipeline/my_pipeline.yaml
-# Use environment variables in templates
 steps:
   - name: extract
     executor: trino_extract
     config:
-      host: {{ TRINO_HOST | default('localhost') }}
-      port: {{ TRINO_PORT | default('8080') }}
-      user: {{ TRINO_USER | default('dagster') }}
-      select_query: SELECT * FROM {{ TRINO_CATALOG | default('lakehouse') }}.{{ TRINO_SCHEMA | default('test') }}.my_table
+      host: {{ trino.host }}                    # From config.yaml
+      port: {{ trino.port }}
+      user: {{ trino.user }}
+      select_query: SELECT * FROM {{ trino.catalog }}.{{ trino.schema }}.my_table
+      target_catalog: {{ trino.catalog }}
+      target_schema: {{ trino.schema }}
+
+  - name: upload
+    executor: dataframe_to_s3
+    config:
+      s3_endpoint: http://{{ minio.host }}:{{ minio.port }}
+      s3_bucket: {{ minio.bucket }}
+      s3_access_key: {{ minio.access_key }}
 ```
 
-**Template Context:**
-- All environment variables (`os.environ`) are available
-- Jinja2 filters like `default()` work for fallback values
-- Use `{{ VARIABLE_NAME }}` syntax for variable substitution
+**Template Context Available:**
+- `trino.*`: All Trino configuration values
+- `minio.*`: All MinIO configuration values
+- `config.*`: Access to entire config structure
+- All environment variables (`os.environ`)
 
-**Common Environment Variables:**
-- `TRINO_HOST`: Trino server hostname
-- `TRINO_PORT`: Trino server port
-- `TRINO_USER`: Trino username
-- `TRINO_CATALOG`: Default Trino catalog
-- `TRINO_SCHEMA`: Default Trino schema
-- `S3_ENDPOINT`: S3/MinIO endpoint URL
-- `S3_ACCESS_KEY`: S3 access key
-- `S3_SECRET_KEY`: S3 secret key
-- `S3_BUCKET`: Default S3 bucket name
+**Advanced Templating:**
+```yaml
+steps:
+  - name: dynamic_extract
+    executor: trino_extract
+    config:
+      # Environment variable override with fallback to config
+      host: {{ TRINO_HOST | default(trino.host) }}
+      # Custom logic and filters
+      select_query: SELECT * FROM {{ trino.catalog }}.{{ trino.schema }}.{{ TABLE_NAME | default('default_table') | upper }}
+      # Conditional configuration
+      {% if ENVIRONMENT == 'production' %}
+      retries: 5
+      {% else %}
+      retries: 1
+      {% endif %}
+```
+
+**Environment Variables:**
+- `TRINO_HOST`: Override Trino server hostname
+- `TRINO_PORT`: Override Trino server port
+- `TRINO_USER`: Override Trino username
+- `TRINO_CATALOG`: Override default Trino catalog
+- `TRINO_SCHEMA`: Override default Trino schema
+- `S3_SECRET_KEY`: MinIO secret key (not in config.yaml for security)
+- `ENVIRONMENT`: Environment name for conditional logic
+- `TABLE_NAME`: Dynamic table name
 
 **Example Usage:**
 ```bash
-# Set environment variables for custom Trino connection
-export TRINO_HOST=my-trino-cluster.com
-export TRINO_CATALOG=my_catalog
-export TRINO_SCHEMA=my_schema
+# Override configuration for different environments
+export TRINO_HOST=my-production-trino.com
+export TRINO_CATALOG=production_catalog
+export ENVIRONMENT=production
 
 # Run Dagster with custom configuration
 uv run dagster dev

@@ -1,0 +1,18 @@
+# Central configuration for all pipelines
+# These values are available as Jinja2 variables in pipeline YAML files
+
+# Trino configuration
+trino:
+  host: trino-0a966bea-trino.trino.svc.cluster.local
+  port: 8080
+  user: dagster
+  catalog: lakehouse
+  schema: test
+
+# MinIO/S3 configuration
+minio:
+  host: minio-ec2bcee8.trino.svc.cluster.local
+  port: 9000
+  bucket: warehouse
+  access_key: admin
+  # secret_key should be provided via environment variable S3_SECRET_KEY

@@ -20,10 +20,10 @@ steps:
     outputs: ["df"]
     concurrency_key: "trino_reads"  # Limit concurrent Trino reads
     config:
-      host: trino-0a966bea-trino.trino.svc.cluster.local
-      port: 8080
-      user: dagster
-      select_query: SELECT * FROM lakehouse.test.test_a
+      host: {{ trino.host }}
+      port: {{ trino.port }}
+      user: {{ trino.user }}
+      select_query: SELECT * FROM {{ trino.catalog }}.{{ trino.schema }}.test_a
       batch_size: 50
       pk: id
       retry:  # Custom retry configuration
@@ -55,11 +55,11 @@ steps:
     depends_on: ["fan_in"]  # Depends on fan-in step
     concurrency_key: "trino_writes"  # Limit concurrent Trino writes
     config:
-      host: trino-0a966bea-trino.trino.svc.cluster.local
-      port: 8080
-      user: dagster
-      target_catalog: lakehouse
-      target_schema: test
+      host: {{ trino.host }}
+      port: {{ trino.port }}
+      user: {{ trino.user }}
+      target_catalog: {{ trino.catalog }}
+      target_schema: {{ trino.schema }}
       target_table: test_trino_duck_fanin_trino
       retry:  # Custom retry configuration
         max_attempts: 3  # Try up to 3 times

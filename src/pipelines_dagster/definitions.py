@@ -137,11 +137,19 @@ def _load_yaml_with_template(file_path: Path) -> dict:
     with open(file_path) as f:
         content = f.read()
 
+    # Load central configuration for template context
+    central_config = _load_pipeline_config()
+
+    # Create Jinja2 template context
+    template_context = dict(os.environ)
+    template_context.update({
+        "config": central_config,  # Make entire config available
+        "trino": central_config.get("trino", {}),
+        "minio": central_config.get("minio", {}),
+    })
+
     # Check if content contains Jinja2 syntax (simple heuristic)
     if "{{" in content and "}}" in content:
-        # Create Jinja2 template context from environment variables
-        template_context = dict(os.environ)
-
         # Render template
         template = jinja2.Template(content)
         rendered = template.render(**template_context)
@@ -151,6 +159,15 @@ def _load_yaml_with_template(file_path: Path) -> dict:
     else:
         # Regular YAML file
         return yaml.safe_load(content)
+
+
+def _load_pipeline_config() -> dict:
+    """Load the central pipeline configuration."""
+    config_path = PIPELINES_BASE_DIR / "config.yaml"
+    if config_path.exists():
+        with open(config_path) as f:
+            return yaml.safe_load(f)
+    return {}
 
 
 def _preprocess_temp_tables(config: dict) -> dict:
@@ -192,6 +209,59 @@ def _preprocess_temp_tables(config: dict) -> dict:
     return processed_config
 
 
+def _create_config_substitutions(config: dict) -> dict:
+    """Create a mapping of placeholder strings to config values for substitution."""
+    substitutions = {}
+
+    if "trino" in config:
+        trino = config["trino"]
+        substitutions.update({
+            "__TRINO_HOST__": trino.get("host", ""),
+            "__TRINO_PORT__": str(trino.get("port", "")),
+            "__TRINO_USER__": trino.get("user", ""),
+            "__TRINO_CATALOG__": trino.get("catalog", ""),
+            "__TRINO_SCHEMA__": trino.get("schema", ""),
+        })
+
+    if "minio" in config:
+        minio = config["minio"]
+        substitutions.update({
+            "__MINIO_HOST__": minio.get("host", ""),
+            "__MINIO_PORT__": str(minio.get("port", "")),
+            "__MINIO_BUCKET__": minio.get("bucket", ""),
+            "__MINIO_ACCESS_KEY__": minio.get("access_key", ""),
+        })
+
+    return substitutions
+
+
+def _apply_config_substitutions(yaml_content: str, substitutions: dict) -> str:
+    """Apply configuration substitutions to YAML content."""
+    result = yaml_content
+    for placeholder, value in substitutions.items():
+        result = result.replace(placeholder, value)
+    return result
+
+
+def _preprocess_with_config(config: dict) -> dict:
+    """Apply configuration substitutions and temp table processing to pipeline config."""
+    # Load central config
+    central_config = _load_pipeline_config()
+    config_substitutions = _create_config_substitutions(central_config)
+
+    # Convert config dict to YAML string for substitution
+    yaml_content = yaml.dump(config, default_flow_style=False)
+
+    # Apply substitutions
+    substituted_yaml = _apply_config_substitutions(yaml_content, config_substitutions)
+
+    # Parse back to dict
+    substituted_config = yaml.safe_load(substituted_yaml)
+
+    # Apply temp table processing
+    return _preprocess_temp_tables(substituted_config)
+
+
 def _generate_temp_table_name_for_config(original_table: str) -> str:
     """Generate a temporary table name in the format: z_temp_{timestamp}_{random32}_{original_table}"""
     import random
@@ -231,8 +301,8 @@ def load_pipeline_configs_from_dir(directory: Path) -> dict[str, dict]:
 
                 if pipeline_yaml.exists():
                     config = _load_yaml_with_template(pipeline_yaml)
-                    # Preprocess temp table configurations
-                    config = _preprocess_temp_tables(config)
+                    # Apply configuration substitutions and temp table processing
+                    config = _preprocess_with_config(config)
                     name = dirname
 
                     # Add pipeline directory info for SQL file resolution
@@ -244,8 +314,8 @@ def load_pipeline_configs_from_dir(directory: Path) -> dict[str, dict]:
             name = yaml_file.stem
             if name not in configs:  # Don't overwrite if already loaded from subdirectory
                 config = _load_yaml_with_template(yaml_file)
-                # Preprocess temp table configurations
-                config = _preprocess_temp_tables(config)
+                # Apply configuration substitutions and temp table processing
+                config = _preprocess_with_config(config)
                 # For legacy files, pipeline_dir is the parent directory
                 config["_pipeline_dir"] = directory
                 configs[name] = config

@@ -1,9 +1,9 @@
 # Asset this pipeline produces (no dots allowed in keys)
-asset_key: ["s3", "warehouse", "exports", "test_trino_s3"]
+asset_key: ["s3", "{{ minio.bucket }}", "exports", "test_trino_s3"]
 
 # Dependencies (asset keys this depends on)
 depends_on:
-  - ["lakehouse", "test", "test_trino_insert_select"]
+  - ["{{ trino.catalog }}", "{{ trino.schema }}", "test_trino_insert_select"]
 
 # Pipeline steps
 steps:
@@ -12,10 +12,10 @@ steps:
     executor: trino_extract
     outputs: ["df"]
     config:
-      host: trino-0a966bea-trino.trino.svc.cluster.local
-      port: 8080
-      user: dagster
-      select_query: "SELECT * FROM lakehouse.test.test_a"
+      host: {{ trino.host }}
+      port: {{ trino.port }}
+      user: {{ trino.user }}
+      select_query: "SELECT * FROM {{ trino.catalog }}.{{ trino.schema }}.test_a"
 
   # Step 2: Load into S3
   - name: load
@@ -23,8 +23,8 @@ steps:
     inputs: ["df"]
     depends_on: ["extract"]
     config:
-      s3_endpoint: http://minio-ec2bcee8.trino.svc.cluster.local:9000
-      s3_bucket: warehouse
-      s3_key: exports/test_trino_s3.csv
-      s3_access_key: admin
+      s3_endpoint: http://{{ minio.host }}:{{ minio.port }}
+      s3_bucket: {{ minio.bucket }}
+      s3_key: exports/{{ trino.schema }}_trino_s3.csv
+      s3_access_key: {{ minio.access_key }}
       # s3_secret_key is provided via environment variable S3_SECRET_KEY

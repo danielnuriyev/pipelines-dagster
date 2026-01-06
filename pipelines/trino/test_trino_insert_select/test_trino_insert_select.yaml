@@ -12,10 +12,10 @@ steps:
   - name: execute
     executor: trino_insert_select
     config:
-      host: trino-0a966bea-trino.trino.svc.cluster.local
-      port: 8080
-      user: dagster
-      select_query: SELECT * FROM lakehouse.test.test_a
-      target_catalog: lakehouse
-      target_schema: test
+      host: {{ trino.host }}
+      port: {{ trino.port }}
+      user: {{ trino.user }}
+      select_query: SELECT * FROM {{ trino.catalog }}.{{ trino.schema }}.test_a
+      target_catalog: {{ trino.catalog }}
+      target_schema: {{ trino.schema }}
       target_table: test_trino_insert_select
