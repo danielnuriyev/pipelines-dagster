@@ -34,10 +34,8 @@ from pipelines_dagster.ops.batch_splitter import batch_splitter_op
 from pipelines_dagster.ops.duckdb_sql import duckdb_sql_op
 from pipelines_dagster.ops.s3_to_trino import s3_to_trino_op
 from pipelines_dagster.ops.trino_insert_select import trino_insert_select_op
-from pipelines_dagster.ops.trino_extract import (
-    trino_extract_op,
-    trino_load_op,
-)
+from pipelines_dagster.ops.trino_extract import trino_extract_op
+from pipelines_dagster.ops.trino_load import trino_load_op
 from pipelines_dagster.sensors import create_job_retry_sensor
 
 
@@ -101,7 +99,8 @@ def resolve_step_dependencies(steps: List[Dict[str, Any]]) -> List[Dict[str, Any
         raise ValueError(f"Circular dependency detected involving steps: {remaining}")
 
     return result
-from pipelines_dagster.ops.trino_to_s3 import trino_to_s3_op, dataframe_to_s3_op
+from pipelines_dagster.ops.trino_to_s3 import trino_to_s3_op
+from pipelines_dagster.ops.dataframe_to_s3 import dataframe_to_s3_op
 
 # Base directory containing pipeline YAML configurations
 # Use relative path when running locally, absolute path in Docker

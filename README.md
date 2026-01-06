@@ -27,31 +27,34 @@ This repository contains user code deployments for [Dagster](https://dagster.io/
 This project uses **Dagster Assets** with auto-materialization for cross-workspace dependencies:
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                           Global Asset Graph                            │
-│                                                                         │
-│  trino workspace:                           s3 workspace:               │
-│                                                                         │
-│  ┌──────────────────────┐    ┌─────────────────────────┐                │
-│  │ lakehouse/test/test_b│    │ lakehouse/test/         │                │
-│  │ ◄── schedule (1 min) │    │ test_c                  │                │
-│  └──────────┬───────────┘    └─────────────────────────┘                │
-│             │                                                           │
-│             ▼                                                           │
-│  ┌─────────────────────────┐                                            │
-│  │ s3/warehouse/exports/   │                                            │
-│  │ trino_export_csv        │                                            │
-│  └────────────┬────────────┘                                            │
-│               │ (cross-workspace)                                       │
-│               ▼                                                         │
-│  ┌─────────────────────────┐                                            │
-│  │ lakehouse/test/s3_data  │                                            │
-│  └─────────────────────────┘                                            │
-└─────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                            Global Asset Graph                                 │
+│                                                                                │
+│  trino workspace:                               s3 workspace:                  │
+│                                                                                │
+│  ┌────────────────────────────┐    ┌──────────────────────────────────┐        │
+│  │ lakehouse/test/test_a      │    │ lakehouse/test/test_trino_*      │        │
+│  │ (source data)              │    │ (various pipeline outputs)       │        │
+│  └────────────┬───────────────┘    └─────────────────┬────────────────┘        │
+│               │                                     │                         │
+│               ▼                                     ▼                         │
+│  ┌────────────────────────────┐    ┌──────────────────────────────────┐        │
+│  │ s3/warehouse/exports/      │    │ lakehouse/test/test_trino_*      │        │
+│  │ test_trino_*.csv           │    │ (parallel targets)               │        │
+│  └────────────────────────────┘    └─────────────────┬────────────────┘        │
+│                                                     │                         │
+│                                                     ▼                         │
+│                                    ┌──────────────────────────────────┐        │
+│                                    │ lakehouse/test/s3_data           │        │
+│                                    │ (cross-workspace dependency)     │        │
+│                                    └──────────────────────────────────┘        │
+└─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Auto-materialization**: When `test_b` is materialized, `trino_export_csv` automatically materializes
-- **Cross-workspace**: `s3_data` (in s3 workspace) depends on `trino_export_csv` (in trino workspace)
+- **Auto-materialization**: When upstream assets are materialized, dependent assets automatically materialize
+- **Cross-workspace**: Assets in different workspaces can depend on each other
+- **Parallel targets**: Pipelines can output to multiple destinations (Trino + S3) simultaneously
+- **Batch processing**: Large datasets are processed in batches with fan-in operations
 
 ## Setup
 
@@ -74,8 +77,10 @@ concurrency:
       limit: 2
     - key: "trino_writes"
       limit: 2
-    - key: "s3_operations"
+    - key: "s3_writes"
       limit: 3
+    - key: "data_processing"
+      limit: 4
 ```
 
 ```bash
@@ -97,26 +102,43 @@ Pipelines are defined in YAML files under the `pipelines/` directory. Each pipel
 ### Basic Structure
 
 ```yaml
-# Asset this pipeline produces
+# Asset this pipeline produces (single asset)
 asset_key: ["lakehouse", "test", "table_name"]
 
-# Dependencies (other assets this depends on)
+# OR: Multiple assets this pipeline produces (parallel targets)
+asset_keys:
+  - ["lakehouse", "test", "table_name"]
+  - ["s3", "warehouse", "exports", "file_name"]
+
+# Dependencies (asset keys this depends on)
 depends_on:
   - ["lakehouse", "test", "upstream_table"]
+
+# Job-level concurrency (max concurrent ops in this job)
+job_concurrency: 4  # Default: unlimited, set to limit parallel execution
+
+# Job retry configuration (optional)
+job_retry:
+  max_attempts: 3          # Maximum retry attempts (default: 3)
+  max_delay: 3600          # Maximum delay cap in seconds (default: 3600)
 
 # Pipeline steps (execute in dependency order)
 steps:
   - name: step_name
     executor: executor_name
-    inputs: ["input_name"]        # Optional: data from previous step
-    outputs: ["output_name"]       # Optional: data for next step
-    depends_on: ["other_step"]     # Optional: steps this step depends on
+    inputs: ["input_name"]        # Data from previous step(s)
+    outputs: ["output_name"]      # Data for next step(s)
+    depends_on: ["other_step"]    # Explicit step dependencies
+    concurrency_key: "op_type"    # Concurrency limit for this step type
     config:
       # SQL can be specified inline or from file:
       sql_query: SELECT * FROM table  # Inline SQL
-      sql_file: sql/my_query.sql     # SQL from file
+      sql_file: sql/my_query.sql     # SQL from file (relative to pipeline directory)
       # Other executor-specific configuration
-      ...
+      retry:                        # Optional: step-level retry configuration
+        max_attempts: 3
+        base_delay: 1.0
+        max_delay: 60.0
 
 # Optional: Schedule (cron expression)
 schedule: "* * * * *"  # Run every minute
@@ -193,6 +215,18 @@ job_retry:
 Control how many operations run simultaneously:
 
 ```yaml
+# Global concurrency limits (in dagster.yaml)
+concurrency:
+  default_limit:
+    - key: "trino_reads"
+      limit: 2
+    - key: "trino_writes"
+      limit: 2
+    - key: "s3_writes"
+      limit: 3
+    - key: "data_processing"
+      limit: 4
+
 # Job-level concurrency (max concurrent ops in this job)
 job_concurrency: 3
 
@@ -206,6 +240,11 @@ steps:
   - name: load
     executor: trino_load
     concurrency_key: "trino_writes"  # Limits concurrent Trino writes
+    config: ...
+
+  - name: process
+    executor: duckdb_sql
+    concurrency_key: "data_processing"  # Limits concurrent data processing
     config: ...
 ```
 
@@ -242,24 +281,50 @@ steps:
 ### Available Executors
 
 - **`trino_insert_select`**: Execute INSERT...SELECT in Trino
-- **`trino_extract`**: Extract data from Trino into pandas DataFrame
+- **`trino_extract`**: Extract data from Trino into pandas DataFrame (supports batching)
 - **`trino_load`**: Load pandas DataFrame into Trino table
 - **`trino_to_s3`**: Query Trino and export results to S3 as CSV
-- **`s3_to_trino`**: Load CSV from S3 into Trino table
-- **`batch_splitter`**: Subdivide a DataFrame into smaller batches
-- **`batch_fan_in`**: Pass DataFrames through unchanged (placeholder for future fan-in functionality)
+- **`dataframe_to_s3`**: Upload pandas DataFrame to S3 as CSV
 
     ```yaml
-    # Simple pass-through operation
-    - name: fan_in_step
-      executor: batch_fan_in
-      inputs: ["input_data"]
-      outputs: ["output_data"]
+    # Upload DataFrame to S3
+    - name: upload_to_s3
+      executor: dataframe_to_s3
+      inputs: ["df"]
+      outputs: ["s3_result"]
+      config:
+        s3_endpoint: http://minio-cluster.svc.cluster.local:9000
+        s3_bucket: warehouse
+        s3_key: exports/my_data.csv
+        s3_access_key: admin
+        # s3_secret_key provided via environment variable
+    ```
+- **`s3_to_trino`**: Load CSV from S3 into Trino table
+- **`duckdb_sql`**: Execute SQL queries on DataFrames using DuckDB
+- **`batch_splitter`**: Subdivide a DataFrame into smaller batches for nested batching
+
+    ```yaml
+    # Further subdivide batches (nested batching)
+    - name: sub_batch
+      executor: batch_splitter
+      inputs: ["df"]
+      outputs: ["sub_batch_df"]
+      depends_on: ["extract"]
+      config:
+        batch_size: 100  # Subdivide into 100-row batches
+        pk: id           # Primary key for consistent ordering
     ```
 
-    **Note**: Currently passes data through unchanged. True fan-in (collecting results from multiple parallel batches) would require `.collect()` operations on dynamic outputs, which the current pipeline architecture doesn't support yet.
+- **`batch_fan_in`**: Combine multiple DataFrames from parallel batches into one
 
-- **`duckdb_sql`**: Execute SQL queries on DataFrames using DuckDB
+    ```yaml
+    # Combine results from parallel processing
+    - name: combine_results
+      executor: batch_fan_in
+      inputs: ["processed_df"]
+      outputs: ["combined_data"]
+      depends_on: ["process_batch"]  # Depends on step that processes batches
+    ```
 
     ```yaml
     # Inline SQL
@@ -282,23 +347,102 @@ steps:
         sql_file: transform_data.sql
     ```
 
-- **`trino_extract`**: Extract data from Trino into pandas DataFrame
+- **`trino_extract`**: Extract data from Trino into pandas DataFrame (supports batching)
 
     ```yaml
-    # Inline SQL
+    # Simple extraction
     - name: extract
       executor: trino_extract
       outputs: ["df"]
       config:
         select_query: SELECT * FROM my_table WHERE active = true
 
-    # SQL from file (relative to pipeline directory)
+    # Batching extraction (creates dynamic outputs)
     - name: extract
       executor: trino_extract
-      outputs: ["df"]
+      outputs: ["df"]  # This becomes a dynamic output when batching
       config:
-        sql_file: extract_active_users.sql
+        select_query: SELECT * FROM large_table ORDER BY id
+        batch_size: 1000  # Process in batches of 1000 rows
+        pk: id           # Primary key for ordering/batching
     ```
+
+### Advanced Pipeline Patterns
+
+#### Parallel Targets (Multi-Asset Pipelines)
+
+Create pipelines that output to multiple destinations in parallel:
+
+```yaml
+# Pipeline that loads to both Trino and S3 simultaneously
+asset_keys:
+  - ["lakehouse", "test", "parallel_table"]
+  - ["s3", "warehouse", "exports", "parallel_data"]
+
+job_concurrency: 4  # Allow parallel execution
+
+steps:
+  - name: extract
+    executor: trino_extract
+    outputs: ["df"]
+    concurrency_key: "trino_reads"
+
+  - name: load_trino
+    executor: trino_load
+    inputs: ["df"]
+    outputs: ["trino_result"]
+    depends_on: ["extract"]  # Parallel to S3 load
+    concurrency_key: "trino_writes"
+
+  - name: load_s3
+    executor: dataframe_to_s3
+    inputs: ["df"]
+    outputs: ["s3_result"]
+    depends_on: ["extract"]  # Parallel to Trino load
+    concurrency_key: "s3_writes"
+```
+
+#### Fan-In Operations (Batch Processing)
+
+Process large datasets in batches, then combine results:
+
+```yaml
+# Extract → Process in batches → Combine → Load
+asset_key: ["lakehouse", "test", "batch_processed"]
+
+job_concurrency: 2
+
+steps:
+  - name: extract
+    executor: trino_extract
+    outputs: ["df"]
+    concurrency_key: "trino_reads"
+    config:
+      select_query: SELECT * FROM large_table ORDER BY id
+      batch_size: 1000  # Process in 1000-row batches
+      pk: id
+
+  - name: process_batch
+    executor: duckdb_sql
+    inputs: ["df"]
+    outputs: ["processed_df"]
+    depends_on: ["extract"]
+    concurrency_key: "data_processing"
+    config:
+      sql_query: SELECT id, UPPER(name) as name, amount * 1.1 as adjusted_amount FROM input_df
+
+  - name: combine_results
+    executor: batch_fan_in
+    inputs: ["processed_df"]
+    outputs: ["combined_data"]
+    depends_on: ["process_batch"]
+
+  - name: load_final
+    executor: trino_load
+    inputs: ["combined_data"]
+    depends_on: ["combine_results"]
+    concurrency_key: "trino_writes"
+```
 
 - **`trino_insert_select`**: Execute INSERT...SELECT in Trino
 
@@ -476,7 +620,7 @@ Or start a specific schedule:
 # Start the test_trino_insert_select schedule (runs every minute)
 curl -s -X POST http://localhost:3000/graphql \
   -H "Content-Type: application/json" \
-  -d '{"query":"mutation { startSchedule(scheduleSelector: {repositoryLocationName: \"trino\", repositoryName: \"__repository__\", scheduleName: \"test_trino_insert_select_schedule\"}) { ... on ScheduleStateResult { scheduleState { status } } } }"}'
+  -d '{"query":"mutation { startSchedule(scheduleSelector: {repositoryLocationName: \"trino\", repositoryName: \"__repository__\", scheduleName: \"test_trino_insert_select\"}) { ... on ScheduleStateResult { scheduleState { status } } }"}'
 ```
 
 **Verify daemons are healthy:**
