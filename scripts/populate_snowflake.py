@@ -1,129 +1,179 @@
 #!/usr/bin/env python3
 """
 Populate the SNOWFLAKE.PUBLIC.test_a table with 100 records with different values.
-Creates the PUBLIC schema in SNOWFLAKE database if it does not exist.
-
-Note: Requires a running Snowflake emulator or compatible server.
+Uses the REST API v2 to connect to the Snowflake emulator.
 
 Usage:
-    uv run python populate_snowflake.py [--host HOST] [--port PORT] [--user USER] [--password PASSWORD] [--database DATABASE] [--schema SCHEMA] [--warehouse WAREHOUSE]
+    uv run python populate_snowflake.py [--host HOST] [--port PORT]
 
 Example:
-    uv run python populate_snowflake.py --host localhost --port 8088 --user snowflake --password snowflake
+    uv run python populate_snowflake.py --host localhost --port 8088
 
 Prerequisites:
-    1. Snowflake emulator or compatible server running
+    1. Snowflake emulator running
     2. Port forwarding if running in Kubernetes:
        kubectl port-forward svc/snowflake-emulator -n trino 8088:8088 &
 """
 
 import argparse
+import json
+import time
 from datetime import datetime, timedelta
+from urllib.request import Request, urlopen
 
-import snowflake.connector
 
-
-def populate_test_a(
-    host: str,
-    port: int,
-    user: str,
-    password: str,
-    database: str = "SNOWFLAKE",
-    schema: str = "PUBLIC",
-    warehouse: str = "COMPUTE_WH"
-) -> None:
-    """Populate test_a table with 100 records with different values."""
-    conn = snowflake.connector.connect(
-        host=host,
-        port=port,
-        user=user,
-        password=password,
-        database=database,
-        schema=schema,
-        warehouse=warehouse,
+def populate_test_a(host: str, port: int) -> None:
+    """Populate test_a table with 100 records with different values using REST API."""
+    base_url = f"http://{host}:{port}/api/v2"
+    database = "SNOWFLAKE"
+    schema = "PUBLIC"
+    table = "test_a"
+    
+    print(f"Connecting to Snowflake emulator at {host}:{port}")
+    
+    # Create database
+    print(f"Creating database {database}...")
+    request_data = json.dumps({"name": database}).encode()
+    req = Request(
+        f"{base_url}/databases",
+        data=request_data,
+        headers={"Content-Type": "application/json"},
+        method="POST"
     )
-    cursor = conn.cursor()
-
-    target_database = database
-    target_schema = schema
-    target_table = "test_a"
-    target_full_name = f"{target_database}.{target_schema}.{target_table}"
-
-    print(f"Populating {target_full_name} with 100 records...")
-
-    # Check if database exists, if not create it
-    cursor.execute(f"SHOW DATABASES LIKE '{target_database}'")
-    database_exists = len(cursor.fetchall()) > 0
-
-    if not database_exists:
-        print(f"Creating database {target_database}...")
-        cursor.execute(f"CREATE DATABASE {target_database}")
-        conn.commit()
-
-    # Check if schema exists, if not create it
-    cursor.execute(f"SHOW SCHEMAS LIKE '{target_schema}' IN DATABASE {target_database}")
-    schema_exists = len(cursor.fetchall()) > 0
-
-    if not schema_exists:
-        print(f"Creating schema {target_database}.{target_schema}...")
-        cursor.execute(f"CREATE SCHEMA {target_database}.{target_schema}")
-        conn.commit()
-
-    # Check if table exists, if not create it
-    cursor.execute(f"SHOW TABLES LIKE '{target_table}' IN {target_database}.{target_schema}")
-    table_exists = len(cursor.fetchall()) > 0
-
-    if not table_exists:
-        print(f"Creating table {target_full_name}...")
-        cursor.execute(f"""
-            CREATE TABLE {target_full_name} (
-                id INTEGER,
-                ts TIMESTAMP
-            )
-        """)
-        conn.commit()
-    else:
-        # Truncate existing table
-        print(f"Truncating existing table {target_full_name}...")
-        cursor.execute(f"DELETE FROM {target_full_name}")
-        conn.commit()
-
-    # Insert 100 records with different values
+    try:
+        response = urlopen(req)
+        print(f"  Database created: {response.status}")
+    except Exception as e:
+        print(f"  Database may already exist: {e}")
+    
+    # Create schema
+    print(f"Creating schema {database}.{schema}...")
+    request_data = json.dumps({"name": schema}).encode()
+    req = Request(
+        f"{base_url}/databases/{database}/schemas",
+        data=request_data,
+        headers={"Content-Type": "application/json"},
+        method="POST"
+    )
+    try:
+        response = urlopen(req)
+        print(f"  Schema created: {response.status}")
+    except Exception as e:
+        print(f"  Schema may already exist: {e}")
+    
+    # Drop table if it exists
+    print(f"Dropping existing table {database}.{schema}.{table}...")
+    drop_sql = f"DROP TABLE IF EXISTS {table}"
+    request_data = json.dumps({
+        "statement": drop_sql,
+        "database": database,
+        "schema": schema
+    }).encode()
+    req = Request(
+        f"{base_url}/statements",
+        data=request_data,
+        headers={"Content-Type": "application/json"},
+        method="POST"
+    )
+    try:
+        response = urlopen(req)
+        print(f"  Table dropped: {response.status}")
+    except Exception as e:
+        print(f"  Drop skipped: {e}")
+    
+    # Create fresh table
+    print(f"Creating table {database}.{schema}.{table}...")
+    create_table_sql = f"CREATE TABLE {table} (id INTEGER, ts TIMESTAMP)"
+    
+    request_data = json.dumps({
+        "statement": create_table_sql,
+        "database": database,
+        "schema": schema
+    }).encode()
+    req = Request(
+        f"{base_url}/statements",
+        data=request_data,
+        headers={"Content-Type": "application/json"},
+        method="POST"
+    )
+    response = urlopen(req)
+    result = json.loads(response.read())
+    print(f"  Table created: {response.status}")
+    
+    # Insert 100 records
     base_timestamp = datetime(2026, 1, 1, 0, 0, 0)
     print("Inserting 100 records...")
-
+    
     for i in range(1, 101):
-        # Each record has a unique ID and incrementing timestamp
         record_id = i
         record_timestamp = base_timestamp + timedelta(seconds=i)
-
-        # Format timestamp for Snowflake: YYYY-MM-DD HH:MM:SS.fff
         ts_str = record_timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-
-        insert_sql = f"INSERT INTO {target_full_name} (id, ts) VALUES ({record_id}, '{ts_str}')"
-        cursor.execute(insert_sql)
-        conn.commit()
-
+        
+        insert_sql = f"INSERT INTO {database}.{schema}.{table} (id, ts) VALUES ({record_id}, '{ts_str}')"
+        
+        request_data = json.dumps({
+            "statement": insert_sql,
+            "database": database,
+            "schema": schema
+        }).encode()
+        req = Request(
+            f"{base_url}/statements",
+            data=request_data,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        response = urlopen(req)
+        
         if (i % 10) == 0:
             print(f"  Inserted {i} records...")
-
+    
     print("Successfully populated table with 100 records")
+    
+    # Verify data
     print(f"\nSample records:")
-    cursor.execute(f"SELECT * FROM {target_full_name} LIMIT 5")
-    for row in cursor.fetchall():
-        print(f"  ID: {row[0]}, Timestamp: {row[1]}")
-
-    cursor.execute(f"SELECT COUNT(*) FROM {target_full_name}")
-    count = cursor.fetchone()[0]
-    print(f"\nTotal records in {target_table}: {count}")
-
-    cursor.close()
-    conn.close()
+    select_sql = f"SELECT * FROM {database}.{schema}.{table} LIMIT 5"
+    request_data = json.dumps({
+        "statement": select_sql,
+        "database": database,
+        "schema": schema
+    }).encode()
+    req = Request(
+        f"{base_url}/statements",
+        data=request_data,
+        headers={"Content-Type": "application/json"},
+        method="POST"
+    )
+    response = urlopen(req)
+    result = json.loads(response.read())
+    
+    if "results" in result and result["results"]:
+        for row in result["results"]:
+            print(f"  ID: {row[0]}, Timestamp: {row[1]}")
+    
+    # Count records
+    count_sql = f"SELECT COUNT(*) FROM {database}.{schema}.{table}"
+    request_data = json.dumps({
+        "statement": count_sql,
+        "database": database,
+        "schema": schema
+    }).encode()
+    req = Request(
+        f"{base_url}/statements",
+        data=request_data,
+        headers={"Content-Type": "application/json"},
+        method="POST"
+    )
+    response = urlopen(req)
+    result = json.loads(response.read())
+    
+    if "results" in result and result["results"]:
+        count = result["results"][0][0]
+        print(f"\nTotal records in {table}: {count}")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Populate test_a table with 100 records with different values"
+        description="Populate test_a table with 100 records using REST API v2"
     )
     parser.add_argument(
         "--host",
@@ -136,44 +186,11 @@ def main():
         default=8088,
         help="Snowflake port (default: 8088)",
     )
-    parser.add_argument(
-        "--user",
-        default="snowflake",
-        help="Snowflake user (default: snowflake)",
-    )
-    parser.add_argument(
-        "--password",
-        default="snowflake",
-        help="Snowflake password (default: snowflake)",
-    )
-    parser.add_argument(
-        "--database",
-        default="SNOWFLAKE",
-        help="Snowflake database (default: SNOWFLAKE)",
-    )
-    parser.add_argument(
-        "--schema",
-        default="PUBLIC",
-        help="Snowflake schema (default: PUBLIC)",
-    )
-    parser.add_argument(
-        "--warehouse",
-        default="COMPUTE_WH",
-        help="Snowflake warehouse (default: COMPUTE_WH)",
-    )
-
+    
     args = parser.parse_args()
-
+    
     try:
-        populate_test_a(
-            host=args.host,
-            port=args.port,
-            user=args.user,
-            password=args.password,
-            database=args.database,
-            schema=args.schema,
-            warehouse=args.warehouse,
-        )
+        populate_test_a(host=args.host, port=args.port)
     except Exception as e:
         print(f"Error: {e}", flush=True)
         exit(1)
