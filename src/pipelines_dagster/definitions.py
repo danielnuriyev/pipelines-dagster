@@ -5,7 +5,9 @@ from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any, Callable, Dict, List
 
+import os
 import yaml
+import jinja2
 from dagster import (
     AssetKey,
     AutomationCondition,
@@ -122,32 +124,53 @@ EXECUTOR_FUNCTIONS: dict[str, Callable[[OpExecutionContext, dict], Any]] = {
 }
 
 
+def _load_yaml_with_template(file_path: Path) -> dict:
+    """Load a YAML file, processing Jinja2 templates if present."""
+    with open(file_path) as f:
+        content = f.read()
+
+    # Check if content contains Jinja2 syntax (simple heuristic)
+    if "{{" in content and "}}" in content:
+        # Create Jinja2 template context from environment variables
+        template_context = dict(os.environ)
+
+        # Render template
+        template = jinja2.Template(content)
+        rendered = template.render(**template_context)
+
+        # Parse as YAML
+        return yaml.safe_load(rendered)
+    else:
+        # Regular YAML file
+        return yaml.safe_load(content)
+
+
 def load_pipeline_configs_from_dir(directory: Path) -> dict[str, dict]:
-    """Load all pipeline configurations from YAML files in a directory."""
+    """Load all pipeline configurations from YAML files (with optional Jinja2 templating)."""
     configs = {}
     if directory.exists():
-        # Look for <dirname>.yaml files in subdirectories (new structure)
+        # Look for <dirname>.yaml files in subdirectories
         for subdir in directory.iterdir():
             if subdir.is_dir():
                 dirname = subdir.name
                 pipeline_yaml = subdir / f"{dirname}.yaml"
+
                 if pipeline_yaml.exists():
+                    config = _load_yaml_with_template(pipeline_yaml)
                     name = dirname
-                    with open(pipeline_yaml) as f:
-                        config = yaml.safe_load(f)
-                        # Add pipeline directory info for SQL file resolution
-                        config["_pipeline_dir"] = subdir
-                        configs[name] = config
+
+                    # Add pipeline directory info for SQL file resolution
+                    config["_pipeline_dir"] = subdir
+                    configs[name] = config
 
         # Also check for *.yaml files directly in directory (legacy support)
         for yaml_file in directory.glob("*.yaml"):
             name = yaml_file.stem
             if name not in configs:  # Don't overwrite if already loaded from subdirectory
-                with open(yaml_file) as f:
-                    config = yaml.safe_load(f)
-                    # For legacy files, pipeline_dir is the parent directory
-                    config["_pipeline_dir"] = directory
-                    configs[name] = config
+                config = _load_yaml_with_template(yaml_file)
+                # For legacy files, pipeline_dir is the parent directory
+                config["_pipeline_dir"] = directory
+                configs[name] = config
 
     return configs
 

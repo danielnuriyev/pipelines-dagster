@@ -99,6 +99,50 @@ uv run pre-commit install
 
 Pipelines are defined in YAML files under the `pipelines/` directory. Each pipeline resides in its own subdirectory with `pipeline.yaml` and any associated SQL files co-located for better organization.
 
+### Jinja2 Templating
+
+Pipeline YAML files support **Jinja2 templating** for dynamic configuration. Any YAML file containing `{{ }}` syntax will be processed as a template. All environment variables are available as template variables:
+
+```yaml
+# pipelines/my_pipeline/my_pipeline.yaml
+# Use environment variables in templates
+steps:
+  - name: extract
+    executor: trino_extract
+    config:
+      host: {{ TRINO_HOST | default('localhost') }}
+      port: {{ TRINO_PORT | default('8080') }}
+      user: {{ TRINO_USER | default('dagster') }}
+      select_query: SELECT * FROM {{ TRINO_CATALOG | default('lakehouse') }}.{{ TRINO_SCHEMA | default('test') }}.my_table
+```
+
+**Template Context:**
+- All environment variables (`os.environ`) are available
+- Jinja2 filters like `default()` work for fallback values
+- Use `{{ VARIABLE_NAME }}` syntax for variable substitution
+
+**Common Environment Variables:**
+- `TRINO_HOST`: Trino server hostname
+- `TRINO_PORT`: Trino server port
+- `TRINO_USER`: Trino username
+- `TRINO_CATALOG`: Default Trino catalog
+- `TRINO_SCHEMA`: Default Trino schema
+- `S3_ENDPOINT`: S3/MinIO endpoint URL
+- `S3_ACCESS_KEY`: S3 access key
+- `S3_SECRET_KEY`: S3 secret key
+- `S3_BUCKET`: Default S3 bucket name
+
+**Example Usage:**
+```bash
+# Set environment variables for custom Trino connection
+export TRINO_HOST=my-trino-cluster.com
+export TRINO_CATALOG=my_catalog
+export TRINO_SCHEMA=my_schema
+
+# Run Dagster with custom configuration
+uv run dagster dev
+```
+
 ### Basic Structure
 
 ```yaml
