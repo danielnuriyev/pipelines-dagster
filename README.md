@@ -18,6 +18,11 @@ This repository contains user code deployments for [Dagster](https://dagster.io/
 │  │  └─ PostgreSQL   │  │  │ workspace   │  │ workspace       │   │ │
 │  │                   │  │  │ (assets)   │  │ (assets)        │   │ │
 │  └──────────────────┘  │  └─────────────┘  └─────────────────┘   │ │
+│                        │                                          │ │
+│                        │  ┌─────────────────┐                     │ │
+│                        │  │ snowflake       │                     │ │
+│                        │  │ emulator        │                     │ │
+│                        │  └─────────────────┘                     │ │
 │                        └─────────────────────────────────────────┘ │
 └────────────────────────────────────────────────────────────────────┘
 ```
@@ -742,10 +747,74 @@ done
 
 ## Data Setup
 
+### Deploy Snowflake Emulator
+
+For detailed instructions on deploying and using the [nnnkkk7/snowflake-emulator](https://github.com/nnnkkk7/snowflake-emulator), see [snowflake.md](snowflake.md).
+
+#### Quick Start
+
+```bash
+# 1. Clone and build the emulator
+cd /Users/danielnuriyev/projects
+git clone https://github.com/nnnkkk7/snowflake-emulator.git
+cd snowflake-emulator
+docker build -t snowflake-emulator:latest .
+
+# 2. Load image into Kind cluster
+kind load docker-image snowflake-emulator:latest --name trino
+
+# 3. Deploy to Kubernetes
+kubectl apply -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: snowflake-emulator
+  namespace: trino
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: snowflake-emulator
+  template:
+    metadata:
+      labels:
+        app: snowflake-emulator
+    spec:
+      containers:
+      - name: snowflake-emulator
+        image: snowflake-emulator:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: snowflake-emulator
+  namespace: trino
+spec:
+  selector:
+    app: snowflake-emulator
+  ports:
+  - port: 8081
+    targetPort: 8080
+  type: ClusterIP
+EOF
+
+# 4. Port-forward for local access
+kubectl port-forward svc/snowflake-emulator -n trino 8088:8081 &
+
+# 5. Populate test data
+uv run python scripts/populate_snowflake.py
+```
+
+**Note:** We build and load the image locally to avoid registry authentication issues. Port `8081` is used for the service to avoid conflicts with Trino's port `8080`. Local port `8088` is used for port-forwarding.
+
 ### Populate Test Data
 
 Before running tests, populate the `test_a` table with sample data:
 
+#### Trino
 ```bash
 # Populate test_a table with 100 records
 uv run python scripts/populate_trino.py
@@ -755,6 +824,20 @@ uv run python scripts/populate_trino.py --host localhost --port 8080 --user dags
 ```
 
 This creates the `lakehouse.test.test_a` table with 100 records containing IDs and timestamps.
+
+#### Snowflake
+```bash
+# Populate test_a table with 100 records (requires Snowflake emulator/server to be running)
+# Note: Official Snowflake emulator not currently available - see deployment section above
+uv run python scripts/populate_snowflake.py
+
+# With custom connection settings
+uv run python scripts/populate_snowflake.py --host localhost --port 8088 --user snowflake --password snowflake
+```
+
+This creates the `SNOWFLAKE.PUBLIC.test_a` table with 100 records containing IDs and timestamps.
+
+**Current Status:** The official Snowflake emulator image is not available. Use LocalStack or alternative testing approaches as documented above.
 
 ## Testing
 
@@ -784,6 +867,7 @@ The project includes comprehensive integration tests for all pipeline functional
 kubectl port-forward svc/dagster-dagster-webserver -n dagster 3000:80 &
 kubectl port-forward svc/trino-0a966bea-trino -n trino 8080:8080 &
 kubectl port-forward svc/minio-ec2bcee8 -n trino 30900:9000 &
+kubectl port-forward svc/snowflake-emulator -n trino 8088:8088 &
 
 # Get MinIO credentials
 export S3_SECRET_KEY=$(kubectl get secret minio-ec2bcee8 -n trino -o jsonpath='{.data.rootPassword}' | base64 -d)
@@ -822,6 +906,13 @@ uv run pytest tests/integration/test_all_pipelines_k8s.py -v -s -m integration
 | `TRINO_PORT` | `8080` | Trino port |
 | `TRINO_CATALOG` | `lakehouse` | Trino catalog |
 | `TRINO_SCHEMA` | `test` | Trino schema |
+| `SNOWFLAKE_HOST` | `localhost` | Snowflake emulator host |
+| `SNOWFLAKE_PORT` | `8088` | Snowflake emulator port |
+| `SNOWFLAKE_USER` | `snowflake` | Snowflake user |
+| `SNOWFLAKE_PASSWORD` | `snowflake` | Snowflake password |
+| `SNOWFLAKE_DATABASE` | `SNOWFLAKE` | Snowflake database |
+| `SNOWFLAKE_SCHEMA` | `PUBLIC` | Snowflake schema |
+| `SNOWFLAKE_WAREHOUSE` | `COMPUTE_WH` | Snowflake warehouse |
 | `S3_ENDPOINT` | `http://localhost:30900` | MinIO/S3 endpoint |
 | `S3_ACCESS_KEY` | `admin` | S3 access key |
 | `S3_SECRET_KEY` | (none) | S3 secret key |

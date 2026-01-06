@@ -9,6 +9,16 @@ trino:
   catalog: lakehouse
   schema: test
 
+# Snowflake emulator configuration
+snowflake:
+  host: snowflake-emulator.trino.svc.cluster.local
+  port: 8088
+  user: snowflake
+  password: snowflake
+  database: SNOWFLAKE
+  schema: PUBLIC
+  warehouse: COMPUTE_WH
+
 # MinIO/S3 configuration
 minio:
   host: minio-ec2bcee8.trino.svc.cluster.local
