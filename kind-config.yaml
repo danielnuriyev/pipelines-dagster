@@ -1,0 +1,49 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: local
+nodes:
+- role: control-plane
+  kubeadmConfigPatches:
+  - |
+    kind: InitConfiguration
+    nodeRegistration:
+      kubeletExtraArgs:
+        node-labels: "ingress-ready=true"
+  extraPortMappings:
+  # Minio
+  - containerPort: 9000
+    hostPort: 9000
+    protocol: TCP
+  - containerPort: 9001
+    hostPort: 9001
+    protocol: TCP
+  # Nessie
+  - containerPort: 19120
+    hostPort: 19120
+    protocol: TCP
+  # Trino
+  - containerPort: 8080
+    hostPort: 8080
+    protocol: TCP
+  # Snowflake Emulator
+  - containerPort: 8081
+    hostPort: 8081
+    protocol: TCP
+  # Dagster
+  - containerPort: 3000
+    hostPort: 3000
+    protocol: TCP
+  - containerPort: 4000
+    hostPort: 4000
+    protocol: TCP
+  - containerPort: 4266
+    hostPort: 4266
+    protocol: TCP
+# Worker nodes
+- role: worker
+- role: worker
+- role: worker
+- role: worker
+- role: worker
+- role: worker
+- role: worker

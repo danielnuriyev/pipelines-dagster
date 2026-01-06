@@ -4,6 +4,7 @@ import time
 from typing import Any, Callable, Type
 
 import trino
+import snowflake.connector
 from botocore.exceptions import ClientError
 from dagster import OpExecutionContext
 
@@ -111,6 +112,24 @@ def is_retryable_s3_error(error: Exception) -> bool:
     return False
 
 
+def is_retryable_snowflake_error(error: Exception) -> bool:
+    """Determine if a Snowflake error should be retried."""
+    if isinstance(error, snowflake.connector.errors.Error):
+        # Check error message for retryable conditions
+        error_message = str(error).lower()
+        return any(keyword in error_message for keyword in [
+            "connection",
+            "timeout",
+            "temporary",
+            "server error",
+            "service unavailable",
+            "too many requests",
+            "rate limit",
+            "throttling"
+        ])
+    return False
+
+
 # Default retry configurations (fallback values)
 DEFAULT_TRINO_RETRY_CONFIG = RetryConfig(
     max_attempts=3,
@@ -124,6 +143,12 @@ DEFAULT_S3_RETRY_CONFIG = RetryConfig(
     max_delay=20.0
 )
 
+DEFAULT_SNOWFLAKE_RETRY_CONFIG = RetryConfig(
+    max_attempts=3,
+    base_delay=2.0,
+    max_delay=30.0
+)
+
 
 def get_retry_config_from_yaml(yaml_config: dict, service_type: str = "trino") -> RetryConfig:
     """
@@ -131,7 +156,7 @@ def get_retry_config_from_yaml(yaml_config: dict, service_type: str = "trino") -
 
     Args:
         yaml_config: Step configuration from YAML
-        service_type: "trino" or "s3" for default fallbacks
+        service_type: "trino", "s3", or "snowflake" for default fallbacks
 
     Returns:
         RetryConfig with values from YAML or defaults
@@ -139,7 +164,12 @@ def get_retry_config_from_yaml(yaml_config: dict, service_type: str = "trino") -
     retry_config = yaml_config.get("retry", {})
 
     # Use defaults based on service type
-    defaults = DEFAULT_TRINO_RETRY_CONFIG if service_type == "trino" else DEFAULT_S3_RETRY_CONFIG
+    if service_type == "trino":
+        defaults = DEFAULT_TRINO_RETRY_CONFIG
+    elif service_type == "snowflake":
+        defaults = DEFAULT_SNOWFLAKE_RETRY_CONFIG
+    else:  # s3 or default
+        defaults = DEFAULT_S3_RETRY_CONFIG
 
     return RetryConfig(
         max_attempts=retry_config.get("max_attempts", defaults.max_attempts),

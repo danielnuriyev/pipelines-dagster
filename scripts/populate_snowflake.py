@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Populate the SNOWFLAKE.PUBLIC.test_a table with 100 records with different values.
+Populate the SNOWFLAKE.PUBLIC.test_source table with 100 records with different values.
 Uses the REST API v2 to connect to the Snowflake emulator.
 
 Usage:
@@ -22,12 +22,12 @@ from datetime import datetime, timedelta
 from urllib.request import Request, urlopen
 
 
-def populate_test_a(host: str, port: int) -> None:
-    """Populate test_a table with 100 records with different values using REST API."""
+def populate_test_source(host: str, port: int) -> None:
+    """Populate test_source table with 100 records with different values using REST API."""
     base_url = f"http://{host}:{port}/api/v2"
     database = "SNOWFLAKE"
     schema = "PUBLIC"
-    table = "test_a"
+    table = "test_source"
     
     print(f"Connecting to Snowflake emulator at {host}:{port}")
     
@@ -173,7 +173,7 @@ def populate_test_a(host: str, port: int) -> None:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Populate test_a table with 100 records using REST API v2"
+        description="Populate test_source table with 100 records using REST API v2"
     )
     parser.add_argument(
         "--host",
@@ -190,7 +190,7 @@ def main():
     args = parser.parse_args()
     
     try:
-        populate_test_a(host=args.host, port=args.port)
+        populate_test_source(host=args.host, port=args.port)
     except Exception as e:
         print(f"Error: {e}", flush=True)
         exit(1)

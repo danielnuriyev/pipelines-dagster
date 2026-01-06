@@ -1,7 +1,7 @@
 # Asset this pipeline produces
 asset_key: ["lakehouse", "test", "test_trino_multiple"]
 
-# Dependencies (asset keys this depends on) - test_a is external/source data
+# Dependencies (asset keys this depends on) - test_source is external/source data
 # depends_on: []
 
 # Schedule (cron expression) - runs every minute
@@ -9,14 +9,14 @@ asset_key: ["lakehouse", "test", "test_trino_multiple"]
 
 # Pipeline steps
 steps:
-  # Step 1: Extract from test_a and load into temp_test
+  # Step 1: Extract from test_source and load into temp_test
   - name: extract_to_temp
     executor: trino_insert_select
     config:
       host: {{ trino.host }}
       port: {{ trino.port }}
       user: {{ trino.user }}
-      select_query: SELECT * FROM {{ trino.catalog }}.{{ trino.schema }}.test_a
+      select_query: SELECT * FROM {{ trino.catalog }}.{{ trino.schema }}.test_source
       target_catalog: {{ trino.catalog }}
       target_schema: {{ trino.schema }}
       target_table: temp_test

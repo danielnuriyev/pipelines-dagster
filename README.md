@@ -637,18 +637,18 @@ When you only change pipeline code or YAML configs, you can skip Pulumi and just
 
 If port-forward is not running, start it first:
 ```bash
-kubectl port-forward svc/dagster-dagster-webserver -n dagster 3000:80 &
+kubectl port-forward svc/dagster-dagster-webserver -n dagster 3000:80 --context kind-local &
 ```
 
 ```bash
 # 1. Build the new image
 docker build -t pipelines-dagster:latest .
 
-# 2. Load the image into kind cluster (replace <cluster-name> with your cluster, e.g., 'trino')
+# 2. Load the image into kind cluster (replace <cluster-name> with your cluster, e.g., 'local')
 kind load docker-image pipelines-dagster:latest --name <cluster-name>
 
 # 3. Delete user code deployment pods to pick up new image
-kubectl delete pods -n dagster -l app.kubernetes.io/name=dagster-user-deployments
+kubectl delete pods -n dagster -l app.kubernetes.io/name=dagster-user-deployments --context kind-local
 
 # 4. Wait for pods to restart (about 20-30 seconds)
 sleep 25
@@ -666,13 +666,13 @@ curl -s -X POST http://localhost:3000/graphql \
 cd /path/to/pipelines-dagster && \
 docker build -t pipelines-dagster:latest . && \
 kind load docker-image pipelines-dagster:latest --name <cluster-name> && \
-kubectl delete pods -n dagster -l app.kubernetes.io/name=dagster-user-deployments && \
+kubectl delete pods -n dagster -l app.kubernetes.io/name=dagster-user-deployments --context kind-local && \
 sleep 25 && \
 curl -s -X POST http://localhost:3000/graphql -H "Content-Type: application/json" -d '{"query":"mutation { reloadWorkspace { __typename } }"}'
 ```
 
 **Note:** 
-- Replace `<cluster-name>` with your kind cluster name (typically `trino` for this project)
+- Replace `<cluster-name>` with your kind cluster name (typically `local` for this project)
 
 ### Verify Deployment
 
@@ -695,7 +695,7 @@ This project uses **Dagster Assets** with auto-materialization policies. Downstr
 
 ```bash
 # Port-forward Dagster if not already running
-kubectl port-forward svc/dagster-dagster-webserver -n dagster 3000:80 &
+kubectl port-forward svc/dagster-dagster-webserver -n dagster 3000:80 --context kind-local &
 
 # Start all schedules
 for schedule in $(curl -s -X POST http://localhost:3000/graphql \
@@ -761,7 +761,7 @@ cd snowflake-emulator
 docker build -t snowflake-emulator:latest .
 
 # 2. Load image into Kind cluster
-kind load docker-image snowflake-emulator:latest --name trino
+kind load docker-image snowflake-emulator:latest --name local
 
 # 3. Deploy to Kubernetes
 kubectl apply -f - <<EOF
@@ -802,7 +802,7 @@ spec:
 EOF
 
 # 4. Port-forward for local access
-kubectl port-forward svc/snowflake-emulator -n trino 8088:8081 &
+kubectl port-forward svc/snowflake-emulator -n trino 8088:8081 --context kind-local &
 
 # 5. Populate test data
 uv run python scripts/populate_snowflake.py
@@ -864,13 +864,13 @@ The project includes comprehensive integration tests for all pipeline functional
 **Run the test:**
 ```bash
 # Set up port-forwards (run in background)
-kubectl port-forward svc/dagster-dagster-webserver -n dagster 3000:80 &
-kubectl port-forward svc/trino-0a966bea-trino -n trino 8080:8080 &
-kubectl port-forward svc/minio-ec2bcee8 -n trino 30900:9000 &
-kubectl port-forward svc/snowflake-emulator -n trino 8088:8088 &
+kubectl port-forward svc/dagster-dagster-webserver -n dagster 3000:80 --context kind-local &
+kubectl port-forward svc/trino-0a966bea-trino -n trino 8080:8080 --context kind-local &
+kubectl port-forward svc/minio-ec2bcee8 -n trino 30900:9000 --context kind-local &
+kubectl port-forward svc/snowflake-emulator -n trino 8088:8088 --context kind-local &
 
 # Get MinIO credentials
-export S3_SECRET_KEY=$(kubectl get secret minio-ec2bcee8 -n trino -o jsonpath='{.data.rootPassword}' | base64 -d)
+export S3_SECRET_KEY=$(kubectl get secret minio-ec2bcee8 -n trino --context kind-local -o jsonpath='{.data.rootPassword}' | base64 -d)
 
 # Run the integration test
 S3_SECRET_KEY=$S3_SECRET_KEY uv run pytest tests/integration/test_full_pipeline.py -v -s
@@ -916,7 +916,7 @@ uv run pytest tests/integration/test_all_pipelines_k8s.py -v -s -m integration
 | `S3_ENDPOINT` | `http://localhost:30900` | MinIO/S3 endpoint |
 | `S3_ACCESS_KEY` | `admin` | S3 access key |
 | `S3_SECRET_KEY` | (none) | S3 secret key |
-| `KIND_CLUSTER` | `trino` | Kind cluster name for deployment |
+| `KIND_CLUSTER` | `local` | Kind cluster name for deployment |
 
 ## Related Repositories
 

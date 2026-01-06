@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Populate the lakehouse.test.test_a table with 100 records with different values.
+Populate the lakehouse.test.test_source table with 100 records with different values.
 Creates the test schema in lakehouse catalog if it does not exist.
 
 Usage:
@@ -16,8 +16,8 @@ from datetime import datetime, timedelta
 import trino
 
 
-def populate_test_a(host: str, port: int, user: str) -> None:
-    """Populate test_a table with 100 records with different values."""
+def populate_test_source(host: str, port: int, user: str) -> None:
+    """Populate test_source table with 100 records with different values."""
     conn = trino.dbapi.connect(
         host=host,
         port=port,
@@ -27,7 +27,7 @@ def populate_test_a(host: str, port: int, user: str) -> None:
 
     target_catalog = "lakehouse"
     target_schema = "test"
-    target_table = "test_a"
+    target_table = "test_source"
     target_full_name = f"{target_catalog}.{target_schema}.{target_table}"
 
     print(f"Populating {target_full_name} with 100 records...")
@@ -104,7 +104,7 @@ def populate_test_a(host: str, port: int, user: str) -> None:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Populate test_a table with 100 records with different values"
+        description="Populate test_source table with 100 records with different values"
     )
     parser.add_argument(
         "--host",
@@ -126,7 +126,7 @@ def main():
     args = parser.parse_args()
 
     try:
-        populate_test_a(
+        populate_test_source(
             host=args.host,
             port=args.port,
             user=args.user,

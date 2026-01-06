@@ -7,6 +7,8 @@ from pipelines_dagster.ops.trino_load import trino_load_op
 from pipelines_dagster.ops.trino_to_s3 import trino_to_s3_op
 from pipelines_dagster.ops.dataframe_to_s3 import dataframe_to_s3_op
 from pipelines_dagster.ops.trino_execute import trino_execute_op
+from pipelines_dagster.ops.snowflake_extract import snowflake_extract_op
+from pipelines_dagster.ops.snowflake_load import snowflake_load_op
 
 __all__ = [
     "trino_insert_select_op",
@@ -16,4 +18,6 @@ __all__ = [
     "trino_extract_op",
     "trino_load_op",
     "trino_execute_op",
+    "snowflake_extract_op",
+    "snowflake_load_op",
 ]

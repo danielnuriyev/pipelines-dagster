@@ -25,7 +25,7 @@ steps:
       host: {{ trino.host }}
       port: {{ trino.port }}
       user: {{ trino.user }}
-      select_query: SELECT * FROM {{ trino.catalog }}.{{ trino.schema }}.test_a
+      select_query: SELECT * FROM {{ trino.catalog }}.{{ trino.schema }}.test_source
       retry:  # Custom retry configuration
         max_attempts: 3  # Try up to 3 times
         base_delay: 1.0   # Wait 1s, 2s, 4s
