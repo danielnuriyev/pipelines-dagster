@@ -1,5 +1,5 @@
 # Asset this pipeline produces
-asset_key: ["lakehouse", "test", "test_b"]
+asset_key: ["lakehouse", "test", "test_trino_insert_select"]
 
 # Dependencies (asset keys this depends on) - test_a is external/source data
 # depends_on: []
@@ -18,4 +18,4 @@ steps:
       select_query: SELECT * FROM lakehouse.test.test_a
       target_catalog: lakehouse
       target_schema: test
-      target_table: test_b
+      target_table: test_trino_insert_select

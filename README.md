@@ -545,10 +545,10 @@ The integration test (`tests/integration/test_full_pipeline.py`) performs end-to
 # Set up port-forwards (run in background)
 kubectl port-forward svc/dagster-dagster-webserver -n dagster 3000:80 &
 kubectl port-forward svc/trino-0a966bea-trino -n trino 8080:8080 &
-kubectl port-forward svc/minio-498506da -n trino 30900:9000 &
+kubectl port-forward svc/minio-ec2bcee8 -n trino 30900:9000 &
 
 # Get MinIO credentials
-export S3_SECRET_KEY=$(kubectl get secret minio-498506da -n trino -o jsonpath='{.data.rootPassword}' | base64 -d)
+export S3_SECRET_KEY=$(kubectl get secret minio-ec2bcee8 -n trino -o jsonpath='{.data.rootPassword}' | base64 -d)
 
 # Run the integration test
 S3_SECRET_KEY=$S3_SECRET_KEY uv run pytest tests/integration/test_full_pipeline.py -v -s

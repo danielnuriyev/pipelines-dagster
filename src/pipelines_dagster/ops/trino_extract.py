@@ -125,6 +125,7 @@ def trino_extract_op(context: OpExecutionContext, config: dict):
 
     df = pd.DataFrame(rows, columns=columns)
     context.log.info(f"Extracted {len(df)} rows with columns: {list(df.columns)}")
+    context.log.info(f"Returning DataFrame with type: {type(df)}")
 
     return df
 
@@ -203,7 +204,7 @@ def trino_extract_batch_generator(context: OpExecutionContext, config: dict):
     return _extract_batches(context, config)
 
 
-def trino_load_op(context: OpExecutionContext, config: dict, df: pd.DataFrame) -> None:
+def trino_load_op(context: OpExecutionContext, config: dict, df: pd.DataFrame) -> str:
     """Step 2: Load pandas DataFrame into Trino target table."""
     context.log.info(f"Connecting to Trino at {config['host']}:{config['port']}")
 
@@ -292,3 +293,7 @@ def trino_load_op(context: OpExecutionContext, config: dict, df: pd.DataFrame) -
 
     cursor.close()
     conn.close()
+
+    # Return success indicator for asset materialization
+    target_full_name = f"{config['target_catalog']}.{config['target_schema']}.{config['target_table']}"
+    return f"trino://{target_full_name}"

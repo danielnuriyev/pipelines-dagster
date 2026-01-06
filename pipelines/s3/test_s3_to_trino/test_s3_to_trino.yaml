@@ -1,5 +1,5 @@
 # Asset this pipeline produces
-asset_key: ["lakehouse", "test", "s3_data"]
+asset_key: ["lakehouse", "test", "test_s3_to_trino"]
 
 # Dependencies (asset keys this depends on) - CROSS-WORKSPACE dependency!
 depends_on:
@@ -10,7 +10,7 @@ steps:
   - name: load
     executor: s3_to_trino
     config:
-      s3_endpoint: http://minio-498506da.trino.svc.cluster.local:9000
+      s3_endpoint: http://minio-ec2bcee8.trino.svc.cluster.local:9000
       s3_bucket: warehouse
       s3_key: exports/trino_export.csv
       s3_access_key: admin
@@ -20,5 +20,5 @@ steps:
       user: dagster
       target_catalog: lakehouse
       target_schema: test
-      target_table: s3_data
+      target_table: test_s3_to_trino
       recreate_table: true  # Drop and recreate table on each run

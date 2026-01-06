@@ -1,18 +1,18 @@
 # Asset this pipeline produces
-asset_key: ["lakehouse", "test", "test_trino_batching_trino"]
+asset_key: ["lakehouse", "test", "test_trino_duck_fanin_trino"]
 
 # Dependencies (asset keys this depends on)
 # depends_on: []
 
 # Job-level concurrency (max concurrent ops in this job)
-job_concurrency: 1
+job_concurrency: 2
 
 # Job retry configuration
 job_retry:
   max_attempts: 3          # Maximum retry attempts
   max_delay: 3600          # Maximum delay (1 hour)
 
-# Pipeline steps - three-step ETL with dependencies
+# Pipeline steps - extract in batches, duck passthrough, fan-in, load to Trino
 steps:
   # Step 1: Extract from Trino in batches
   - name: extract
@@ -27,15 +27,32 @@ steps:
       batch_size: 50
       pk: id
       retry:  # Custom retry configuration
-        max_attempts: 3  # Try up to 5 times instead of default 3
-        base_delay: 1.0   # Wait 3s, 6s, 12s, 24s, 48s
+        max_attempts: 3  # Try up to 3 times
+        base_delay: 1.0   # Wait 1s, 2s, 4s
         max_delay: 60.0   # Cap delay at 60 seconds
 
-  # Step 3: Load transformed data into test_d
+  # Step 2: DuckDB passthrough on each batch
+  - name: duck_passthrough
+    executor: duckdb_sql
+    inputs: ["df"]
+    outputs: ["processed_df"]
+    depends_on: ["extract"]  # Depends on extract step
+    concurrency_key: "data_processing"  # Limit concurrent data processing
+    config:
+      sql_query: "SELECT * FROM input_df"  # Simple passthrough query
+
+  # Step 3: Fan-in to collect all processed batches
+  - name: fan_in
+    executor: batch_fan_in
+    inputs: ["processed_df"]
+    outputs: ["combined_data"]
+    depends_on: ["duck_passthrough"]  # Depends on duck processing
+
+  # Step 4: Load combined data into Trino
   - name: load
     executor: trino_load
-    inputs: ["df"]
-    depends_on: ["extract"]  # Depends on transform step
+    inputs: ["combined_data"]
+    depends_on: ["fan_in"]  # Depends on fan-in step
     concurrency_key: "trino_writes"  # Limit concurrent Trino writes
     config:
       host: trino-0a966bea-trino.trino.svc.cluster.local
@@ -43,8 +60,8 @@ steps:
       user: dagster
       target_catalog: lakehouse
       target_schema: test
-      target_table: test_trino_batching_trino
+      target_table: test_trino_duck_fanin_trino
       retry:  # Custom retry configuration
-        max_attempts: 3  # Try up to 5 times instead of default 3
-        base_delay: 1.0   # Wait 3s, 6s, 12s, 24s, 48s
+        max_attempts: 3  # Try up to 3 times
+        base_delay: 1.0   # Wait 1s, 2s, 4s
         max_delay: 60.0   # Cap delay at 60 seconds

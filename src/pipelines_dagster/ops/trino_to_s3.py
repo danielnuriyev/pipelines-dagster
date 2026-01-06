@@ -16,10 +16,21 @@ from pipelines_dagster.retry_utils import (
 )
 
 
-def dataframe_to_s3_op(context: OpExecutionContext, config: dict, df: pd.DataFrame) -> None:
+def dataframe_to_s3_op(context: OpExecutionContext, config: dict, df: pd.DataFrame) -> str:
     """Upload a pandas DataFrame to S3 as CSV."""
+    # Debug: Check if df is None
+    if df is None:
+        context.log.error("ERROR: DataFrame is None in dataframe_to_s3_op!")
+        raise ValueError("DataFrame input is None")
+
+    context.log.info(f"DataFrame type: {type(df)}, shape: {df.shape if hasattr(df, 'shape') else 'no shape'}")
+
+    # Make a copy of the DataFrame to avoid any sharing issues
+    df_copy = df.copy()
+    context.log.info(f"DataFrame copy created, shape: {df_copy.shape}")
+
     # Convert DataFrame to CSV
-    csv_content = df.to_csv(index=False)
+    csv_content = df_copy.to_csv(index=False)
 
     # Get S3 secret from environment
     s3_secret_key = os.environ.get("S3_SECRET_KEY", "")
@@ -58,6 +69,9 @@ def dataframe_to_s3_op(context: OpExecutionContext, config: dict, df: pd.DataFra
         raise
 
     context.log.info(f"Uploaded DataFrame to s3://{config['s3_bucket']}/{config['s3_key']}")
+
+    # Return success indicator for asset materialization
+    return f"s3://{config['s3_bucket']}/{config['s3_key']}"
 
 
 def trino_to_s3_op(context: OpExecutionContext, config: dict) -> None:

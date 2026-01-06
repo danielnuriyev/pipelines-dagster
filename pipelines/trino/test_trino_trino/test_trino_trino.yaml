@@ -1,5 +1,5 @@
 # Asset this pipeline produces
-asset_key: ["lakehouse", "test", "test_c"]
+asset_key: ["lakehouse", "test", "test_trino_trino"]
 
 # Dependencies (asset keys this depends on)
 # depends_on: []
@@ -41,7 +41,7 @@ steps:
       user: dagster
       target_catalog: lakehouse
       target_schema: test
-      target_table: test_c
+      target_table: test_trino_trino
       retry:  # Custom retry configuration
         max_attempts: 3  # Try up to 3 times
         base_delay: 1.0   # Wait 1s, 2s, 4s

@@ -23,6 +23,10 @@ from dagster import (
     job,
     multiprocess_executor,
     op,
+    graph,
+    AssetOut,
+    GraphOut,
+    AssetsDefinition,
 )
 
 from pipelines_dagster.ops.batch_fan_in import batch_fan_in_op
@@ -57,7 +61,7 @@ def resolve_step_dependencies(steps: List[Dict[str, Any]]) -> List[Dict[str, Any
     step_indices = {step["name"]: i for i, step in enumerate(steps)}
 
     # Build dependency graph
-    graph = defaultdict(list)  # step -> list of steps that depend on it
+    graph_deps = defaultdict(list)  # step -> list of steps that depend on it
     in_degree = {step["name"]: 0 for step in steps}
 
     for step in steps:
@@ -67,7 +71,7 @@ def resolve_step_dependencies(steps: List[Dict[str, Any]]) -> List[Dict[str, Any
         for dep in depends_on:
             if dep not in step_indices:
                 raise ValueError(f"Step '{step_name}' depends on unknown step '{dep}'")
-            graph[dep].append(step_name)
+            graph_deps[dep].append(step_name)
             in_degree[step_name] += 1
 
     # Topological sort using Kahn's algorithm
@@ -86,7 +90,7 @@ def resolve_step_dependencies(steps: List[Dict[str, Any]]) -> List[Dict[str, Any
         result.append(step_config)
 
         # Update dependencies
-        for dependent in graph[current_step_name]:
+        for dependent in graph_deps[current_step_name]:
             in_degree[dependent] -= 1
             if in_degree[dependent] == 0:
                 queue.append(dependent)
@@ -172,7 +176,6 @@ def create_op_for_step(step_name: str, executor_func: Callable, step_config: dic
     if concurrency_key:
         op_tags["dagster/concurrency_key"] = concurrency_key
 
-
     if is_batching:
         # Batching op: produces DynamicOut
         if has_inputs:
@@ -195,7 +198,7 @@ def create_op_for_step(step_name: str, executor_func: Callable, step_config: dic
     elif has_inputs and not has_outputs:
         @op(name=f"{job_name}_{step_name}", ins={"data": In()}, tags=op_tags)
         def step_op(context: OpExecutionContext, data):
-            executor_func(context, step_cfg, data)
+            return executor_func(context, step_cfg, data)
 
     elif not has_inputs and has_outputs:
         @op(name=f"{job_name}_{step_name}", out=Out(), tags=op_tags)
@@ -205,33 +208,29 @@ def create_op_for_step(step_name: str, executor_func: Callable, step_config: dic
     else:
         @op(name=f"{job_name}_{step_name}", tags=op_tags)
         def step_op(context: OpExecutionContext):
-            executor_func(context, step_cfg)
+            return executor_func(context, step_cfg)
 
     return step_op
 
 
 def make_graph_asset_from_steps(
-    job_name: str, asset_key: AssetKey, dep_keys: set, steps: list
+    job_name: str, asset_keys: list, dep_keys: set, resolved_steps: list
 ):
-    """Create an asset that executes pipeline steps.
-
-    Uses @graph_asset with .map() chaining for pipelines with at most 1 batching step,
-    showing individual ops in the UI. Uses recursive execution for nested batching.
-    """
-
-    if not steps:
+    """Create a graph-backed asset (or multi-asset) from pipeline steps."""
+    
+    if not resolved_steps:
         raise ValueError(f"No steps defined for job: {job_name}")
 
     # Determine which steps have batching
     def step_has_batching(step):
         return step.get("config", {}).get("batch_size") is not None
 
-    batching_step_indices = [i for i, step in enumerate(steps) if step_has_batching(step)]
+    batching_step_indices = [i for i, step in enumerate(resolved_steps) if step_has_batching(step)]
     batching_step_count = len(batching_step_indices)
 
     # Create ops for each step
     step_ops_list = []
-    for i, step in enumerate(steps):
+    for i, step in enumerate(resolved_steps):
         executor_name = step.get("executor")
         step_name = step.get("name", f"step_{i}")
 
@@ -254,143 +253,133 @@ def make_graph_asset_from_steps(
             "is_batching": is_batching,
         })
 
-    # Validate pipeline structure
-    if step_ops_list:
+    # Find all leaf nodes (steps that no other step depends on)
+    all_deps = set()
+    for s in step_ops_list:
+        all_deps.update(s["config"].get("depends_on", []))
+    leaf_names = [s["name"] for s in step_ops_list if s["name"] not in all_deps]
+
+    # Heuristic to map leaf nodes to asset keys if we have multiple of both
+    asset_key_objects = [AssetKey(ak) for ak in asset_keys]
+    
+    # Internal function to define the graph logic
+    def define_graph():
+        outputs = {}
+        step_is_dynamic = {}
+
+        # First step (must have no inputs)
         first_step = step_ops_list[0]
-        if first_step["has_inputs"]:
-            raise ValueError(f"First step '{first_step['name']}' should not have inputs")
+        outputs[first_step["name"]] = first_step["op"]()
+        step_is_dynamic[first_step["name"]] = first_step["is_batching"]
 
-    # Check if any non-first step has no inputs (can't use .map() on them)
-    has_inputless_steps = any(not step["has_inputs"] for step in step_ops_list[1:])
+        # Process remaining steps in order (topologically sorted)
+        for step_info in step_ops_list[1:]:
+            name = step_info["name"]
+            step_op = step_info["op"]
+            depends_on = step_info["config"].get("depends_on", [])
+            executor_name = step_info["config"].get("executor")
+            
+            if not depends_on:
+                outputs[name] = step_op()
+                step_is_dynamic[name] = step_info["is_batching"]
+                continue
 
-    # Use @graph_asset with .map() chaining for 0 or 1 batching steps and all steps have inputs
-    if batching_step_count <= 1 and not has_inputless_steps:
-        # Create a final collect op for dynamic results
-        @op(name=f"{job_name}_collect_final", ins={"data": In()})
-        def collect_final_op(data):
-            return data  # data is the collected list
-
-        @graph_asset(
-            name=asset_key.path[-1],
-            key_prefix=asset_key.path[:-1] if len(asset_key.path) > 1 else None
-        )
-        def graph_backed_asset():
-            # First step
-            data = step_ops_list[0]["op"]()
-            is_dynamic = step_ops_list[0]["is_batching"]
-
-            # Chain remaining steps using .map() when dynamic
-            for step_info in step_ops_list[1:]:
-                step_op = step_info["op"]
-
-                if is_dynamic:
-                    # Use .map() to apply op to each dynamic output
-                    data = data.map(step_op)
+            # Use the first dependency for the 'data' input
+            dep_name = depends_on[0]
+            dep_output = outputs[dep_name]
+            
+            if step_is_dynamic[dep_name]:
+                if executor_name == "batch_fan_in":
+                    # Fan-in: collect all parallel outputs into a list
+                    # This collapses the dynamic stream
+                    outputs[name] = step_op(data=dep_output.collect())
+                    step_is_dynamic[name] = step_info["is_batching"]
                 else:
-                    # Regular invocation
-                    data = step_op(data) if step_info["has_inputs"] else step_op()
-                    is_dynamic = step_info["is_batching"]
-
-            # If final result is dynamic, collect it and pass to final op
-            # if is_dynamic:
-            #    return collect_final_op(data.collect())
-            # Otherwise, return the final data directly
-            return data
-
-        return graph_backed_asset
-
-    # Nested batching (2+ batching steps): use recursive execution
-    @asset(
-        key=asset_key,
-        deps=list(dep_keys) if dep_keys else None,
-        automation_condition=AutomationCondition.eager(),
-    )
-    def graph_backed_asset(context: OpExecutionContext):
-        """Process through all steps with support for nested batching fan-out."""
-
-        def execute_steps_from(
-            start_idx: int,
-            input_data: Any,
-            batch_context: dict,
-        ) -> None:
-            """Recursively execute steps with nested batching support."""
-            if start_idx >= len(step_ops_list):
-                return
-
-            step_info = step_ops_list[start_idx]
-            step_name = step_info["name"]
-            step_executor = step_info["executor"]
-            has_inputs = step_info["has_inputs"]
-            has_outputs = step_info["has_outputs"]
-            step_cfg = step_info["config"].get("config", {}).copy()
-
-            batch_size = step_cfg.get("batch_size")
-
-            if batch_size:
-                context.log.info(f"Step {start_idx} ('{step_name}') batching with batch_size={batch_size}")
-
-                # Get batch generator
-                if has_inputs and input_data is not None:
-                    batch_generator = step_executor(context, step_cfg, input_data)
-                else:
-                    batch_generator = step_executor(context, step_cfg)
-
-                # Process each batch
-                batch_num = 0
-                for batch_key, batch_data in batch_generator:
-                    batch_num += 1
-                    batch_path = f"{batch_context.get('path', '')}/{step_name}:{batch_num}"
-                    context.log.info(f"Processing batch path: {batch_path}")
-
-                    new_batch_context = batch_context.copy()
-                    new_batch_context["path"] = batch_path
-                    new_batch_context[f"step_{start_idx}_batch"] = batch_num
-
-                    if not has_outputs:
-                        batch_cfg = step_cfg.copy()
-                        if "recreate_table" in batch_cfg and batch_num > 1:
-                            batch_cfg["recreate_table"] = False
-                        step_executor(context, batch_cfg, batch_data)
-                        batch_data = None
-                    # TODO: 
-                    # switch from recursion to queue and add progress bar
-                    # not doing it now because chaining batches is not common
-                    execute_steps_from(start_idx + 1, batch_data, new_batch_context)
-
-                context.log.info(f"Step {start_idx} completed {batch_num} batches")
-
+                    # Continue parallel processing using .map()
+                    outputs[name] = dep_output.map(step_op)
+                    step_is_dynamic[name] = True # Map propagates dynamic status
             else:
-                exec_cfg = step_cfg.copy()
-                
-                if "recreate_table" in exec_cfg:
-                    is_first_batch = all(
-                        batch_context.get(f"step_{i}_batch", 1) == 1
-                        for i in range(start_idx)
-                    )
-                    if not is_first_batch:
-                        exec_cfg["recreate_table"] = False
-                
-                if has_inputs:
-                    result = step_executor(context, exec_cfg, input_data)
-                else:
-                    result = step_executor(context, exec_cfg)
+                # Regular invocation
+                outputs[name] = step_op(data=dep_output) if step_info["has_inputs"] else step_op()
+                step_is_dynamic[name] = step_info["is_batching"]
 
-                output_data = result if has_outputs else None
-                execute_steps_from(start_idx + 1, output_data, batch_context)
+        return outputs
 
-        execute_steps_from(0, None, {"path": "root"})
+    if len(asset_key_objects) > 1 and len(leaf_names) > 1:
+        # Multi-asset support for parallel outputs using AssetsDefinition.from_graph
+        keys_by_output_name = {}
+        remaining_keys = asset_key_objects.copy()
+        remaining_leaves = leaf_names.copy()
+
+        # Match Trino leaves to lakehouse keys
+        trino_leaves = [l for l in remaining_leaves if "trino" in l.lower()]
+        lakehouse_keys = [k for k in remaining_keys if k.path[0].lower() == "lakehouse"]
+        for i in range(min(len(trino_leaves), len(lakehouse_keys))):
+            leaf = trino_leaves[i]
+            key = lakehouse_keys[i]
+            keys_by_output_name[leaf] = key
+            remaining_leaves.remove(leaf)
+            remaining_keys.remove(key)
+
+        # Match S3 leaves to s3 keys
+        s3_leaves = [l for l in remaining_leaves if "s3" in l.lower()]
+        s3_keys = [k for k in remaining_keys if k.path[0].lower() == "s3"]
+        for i in range(min(len(s3_leaves), len(s3_keys))):
+            leaf = s3_leaves[i]
+            key = s3_keys[i]
+            keys_by_output_name[leaf] = key
+            remaining_leaves.remove(leaf)
+            remaining_keys.remove(key)
+
+        # Map remaining leaves to remaining keys by order
+        for i in range(min(len(remaining_leaves), len(remaining_keys))):
+            leaf = remaining_leaves[i]
+            key = remaining_keys[i]
+            keys_by_output_name[leaf] = key
+
+        # Define the graph with explicit GraphOuts matching leaf names
+        @graph(name=f"{job_name}_graph", out={leaf: GraphOut() for leaf in keys_by_output_name.keys()})
+        def pipeline_graph():
+            outputs = define_graph()
+            return {leaf: outputs[leaf] for leaf in keys_by_output_name.keys()}
+
+        return AssetsDefinition.from_graph(
+            pipeline_graph,
+            keys_by_output_name=keys_by_output_name,
+            can_subset=True,
+        )
+
+    # Single asset or joining multiple leaves into one asset
+    @graph_asset(
+        name=asset_key_objects[0].path[-1],
+        key_prefix=asset_key_objects[0].path[:-1] if len(asset_key_objects[0].path) > 1 else None,
+    )
+    def graph_backed_asset():
+        outputs = define_graph()
+        
+        if len(leaf_names) > 1:
+            # Join non-dynamic leaves if possible
+            if not any(step_is_dynamic[name] for name in leaf_names):
+                ins = {f"in_{i}": In() for i in range(len(leaf_names))}
+                @op(name=f"{job_name}_join_outputs", ins=ins)
+                def join_outputs(**kwargs):
+                    return list(kwargs.values())[-1]
+                return join_outputs(**{f"in_{i}": outputs[name] for i, name in enumerate(leaf_names)})
+        
+        return outputs[step_ops_list[-1]["name"]]
 
     return graph_backed_asset
 
 
 def make_asset_for_pipeline(job_name: str, config: dict):
-    """Create an asset for a pipeline configuration based on its steps."""
-    # Get asset key from config
-    asset_key_list = config.get("asset_key")
-    if not asset_key_list:
-        raise ValueError(f"Missing 'asset_key' in config for job: {job_name}")
-
-    asset_key = AssetKey(asset_key_list)
+    """Create asset(s) for a pipeline configuration based on its steps."""
+    # Support both 'asset_key' and 'asset_keys'
+    asset_keys = config.get("asset_keys")
+    if not asset_keys:
+        single_key = config.get("asset_key")
+        if not single_key:
+            raise ValueError(f"Missing 'asset_key' or 'asset_keys' in config for job: {job_name}")
+        asset_keys = [single_key]
 
     # Get dependencies
     depends_on = config.get("depends_on", [])
@@ -414,8 +403,8 @@ def make_asset_for_pipeline(job_name: str, config: dict):
     # Resolve step dependencies for execution order
     resolved_steps = resolve_step_dependencies(steps)
 
-    # All pipelines (single or multi-step, batched or non-batched) handled by unified engine
-    return make_graph_asset_from_steps(job_name, asset_key, dep_keys, resolved_steps)
+    # Multi-asset handles multiple parallel outputs as separate Dagster assets
+    return make_graph_asset_from_steps(job_name, asset_keys, dep_keys, resolved_steps)
 
 
 def generate_definitions_for_workspace(workspace_name: str) -> Definitions:
@@ -430,9 +419,12 @@ def generate_definitions_for_workspace(workspace_name: str) -> Definitions:
 
     # Create all assets
     for job_name, config in configs.items():
-        asset_key = config.get("asset_key")
-        if not asset_key:
-            continue  # Skip configs without an asset_key
+        asset_keys = config.get("asset_keys")
+        if not asset_keys:
+            asset_key = config.get("asset_key")
+            if not asset_key:
+                continue
+            asset_keys = [asset_key]
 
         pipeline_asset = make_asset_for_pipeline(job_name, config)
         assets.append(pipeline_asset)
@@ -440,44 +432,48 @@ def generate_definitions_for_workspace(workspace_name: str) -> Definitions:
     # Create jobs for assets that have schedules
     for job_name, config in configs.items():
         schedule_cron = config.get("schedule")
-        if not schedule_cron:
-            continue
+        if schedule_cron:
+            asset_keys = config.get("asset_keys")
+            if not asset_keys:
+                asset_key = config.get("asset_key")
+                if not asset_key:
+                    continue
+                asset_keys = [asset_key]
 
-        asset_key = config.get("asset_key")
-        if not asset_key:
-            continue
+            # Create asset keys list for job selection
+            asset_key_objects = [AssetKey(key) for key in asset_keys if key]
 
-        # Create a job that materializes this specific asset
-        job_concurrency = config.get("job_concurrency")
-        if job_concurrency:
-            # Custom job with concurrency limits
-            @job(
-                name=f"{job_name}_job",
-                executor_def=multiprocess_executor.configured({
-                    "max_concurrent": job_concurrency
-                })
+            # Create a job that materializes these specific assets
+            job_concurrency = config.get("job_concurrency")
+            if job_concurrency:
+                # Custom job with concurrency limits
+                @job(
+                    name=f"{job_name}_job",
+                    executor_def=multiprocess_executor.configured({
+                        "max_concurrent": job_concurrency
+                    })
+                )
+                def asset_job():
+                    # Import here to avoid circular imports
+                    from dagster import materialize
+                    materialize(asset_key_objects)
+                jobs.append(asset_job)
+            else:
+                # Default job without concurrency limits
+                asset_job = define_asset_job(
+                    name=f"{job_name}_job",
+                    selection=asset_key_objects,
+                )
+                jobs.append(asset_job)
+
+            # Create a schedule for this job
+            schedule = ScheduleDefinition(
+                name=f"{job_name}_schedule",
+                job=asset_job,
+                cron_schedule=schedule_cron,
+                default_status=DefaultScheduleStatus.RUNNING,
             )
-            def asset_job():
-                # Import here to avoid circular imports
-                from dagster import materialize
-                materialize([AssetKey(asset_key)])
-            jobs.append(asset_job)
-        else:
-            # Default job without concurrency limits
-            asset_job = define_asset_job(
-                name=f"{job_name}_job",
-                selection=[AssetKey(asset_key)],
-            )
-            jobs.append(asset_job)
-
-        # Create a schedule for this job
-        schedule = ScheduleDefinition(
-            name=f"{job_name}_schedule",
-            job=asset_job,
-            cron_schedule=schedule_cron,
-            default_status=DefaultScheduleStatus.RUNNING,
-        )
-        schedules.append(schedule)
+            schedules.append(schedule)
 
     # Create sensors for pipelines with retry configuration (only if they have a schedule/job)
     for job_name, config in configs.items():
