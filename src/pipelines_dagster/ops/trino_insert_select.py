@@ -70,11 +70,15 @@ def trino_insert_select_op(context: OpExecutionContext, config: dict) -> None:
     """Execute INSERT INTO target_table SELECT ... with configurable source and target.
 
     SQL can be specified either inline (select_query/sql_query) or from a file (sql_file).
+    If temp: True is specified, creates a temporary table with unique naming.
     """
     context.log.info(f"Connecting to Trino at {config['host']}:{config['port']}")
 
     # Load SQL query from config or file
     select_query = _load_sql_query(config, context)
+
+    # Use actual table name if it was preprocessed for temp tables
+    actual_table = config.get("actual_target_table", config.get("target_table"))
 
     def connect_trino():
         return trino.dbapi.connect(
@@ -96,14 +100,14 @@ def trino_insert_select_op(context: OpExecutionContext, config: dict) -> None:
         raise
     cursor = conn.cursor()
 
-    target_full_name = f"{config['target_catalog']}.{config['target_schema']}.{config['target_table']}"
+    target_full_name = f"{config['target_catalog']}.{config['target_schema']}.{actual_table}"
 
     # Check if target table exists
     cursor.execute(f"""
         SELECT table_name FROM {config['target_catalog']}.information_schema.tables
         WHERE table_catalog = '{config['target_catalog']}'
         AND table_schema = '{config['target_schema']}'
-        AND table_name = '{config['target_table']}'
+        AND table_name = '{actual_table}'
     """)
     table_exists = len(cursor.fetchall()) > 0
 

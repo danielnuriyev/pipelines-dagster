@@ -714,7 +714,12 @@ This creates the `lakehouse.test.test_a` table with 100 records containing IDs a
 
 ### Run Integration Tests
 
-The integration test (`tests/integration/test_full_pipeline.py`) performs end-to-end verification of the entire pipeline:
+### Integration Tests
+
+The project includes comprehensive integration tests for all pipeline functionality:
+
+#### Full Pipeline Chain Test
+`tests/integration/test_full_pipeline.py` performs end-to-end verification of the cross-workspace pipeline:
 
 **What it tests:**
 1. Deploys updated code to Dagster
@@ -728,7 +733,6 @@ The integration test (`tests/integration/test_full_pipeline.py`) performs end-to
 - Test data populated (run `populate_trino.py` first)
 
 **Run the test:**
-
 ```bash
 # Set up port-forwards (run in background)
 kubectl port-forward svc/dagster-dagster-webserver -n dagster 3000:80 &
@@ -740,6 +744,27 @@ export S3_SECRET_KEY=$(kubectl get secret minio-ec2bcee8 -n trino -o jsonpath='{
 
 # Run the integration test
 S3_SECRET_KEY=$S3_SECRET_KEY uv run pytest tests/integration/test_full_pipeline.py -v -s
+```
+
+#### All Pipelines Tests
+
+**Local Dagster Test** (`tests/integration/test_all_pipelines_local.py`):
+- Deploys all pipelines to local Dagster instance
+- Discovers and tests all `test_*` pipeline assets
+- Verifies each pipeline materializes successfully
+
+**Kubernetes Dagster Test** (`tests/integration/test_all_pipelines_k8s.py`):
+- Builds Docker image and deploys to Kubernetes Dagster
+- Discovers and tests all `test_*` pipeline assets
+- Verifies each pipeline materializes successfully
+
+**Run all pipelines tests:**
+```bash
+# For local Dagster (assuming dev server is running)
+uv run pytest tests/integration/test_all_pipelines_local.py -v -s -m integration
+
+# For Kubernetes Dagster
+uv run pytest tests/integration/test_all_pipelines_k8s.py -v -s -m integration
 ```
 
 **Environment variables:**

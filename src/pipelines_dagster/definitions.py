@@ -16,6 +16,7 @@ from dagster import (
     DynamicOut,
     DynamicOutput,
     In,
+    Nothing,
     OpExecutionContext,
     Out,
     ScheduleDefinition,
@@ -38,6 +39,7 @@ from pipelines_dagster.ops.s3_to_trino import s3_to_trino_op
 from pipelines_dagster.ops.trino_insert_select import trino_insert_select_op
 from pipelines_dagster.ops.trino_extract import trino_extract_op
 from pipelines_dagster.ops.trino_load import trino_load_op
+from pipelines_dagster.ops.trino_execute import trino_execute_op
 from pipelines_dagster.sensors import create_job_retry_sensor
 
 
@@ -110,6 +112,10 @@ default_path = "/app/pipelines" if os.path.exists("/app/pipelines") else "pipeli
 PIPELINES_BASE_DIR = Path(os.environ.get("PIPELINES_CONFIG_DIR", default_path))
 
 
+def passthrough_op(context: OpExecutionContext, config: dict, data: Any = None, **kwargs) -> Any:
+    """Simple pass-through operation that returns the input data."""
+    return data
+
 # Map executor names to their implementation functions
 EXECUTOR_FUNCTIONS: dict[str, Callable[[OpExecutionContext, dict], Any]] = {
     "trino_insert_select": trino_insert_select_op,
@@ -118,9 +124,11 @@ EXECUTOR_FUNCTIONS: dict[str, Callable[[OpExecutionContext, dict], Any]] = {
     "s3_to_trino": s3_to_trino_op,
     "trino_extract": trino_extract_op,
     "trino_load": trino_load_op,
+    "trino_execute": trino_execute_op,
     "batch_splitter": batch_splitter_op,
     "batch_fan_in": batch_fan_in_op,
     "duckdb_sql": duckdb_sql_op,
+    "passthrough": passthrough_op,
 }
 
 
@@ -145,6 +153,72 @@ def _load_yaml_with_template(file_path: Path) -> dict:
         return yaml.safe_load(content)
 
 
+def _preprocess_temp_tables(config: dict) -> dict:
+    """Preprocess pipeline config to handle temp table configurations and dependencies."""
+    if "steps" not in config:
+        return config
+
+    # Find all temp steps and generate their table names upfront
+    temp_mappings = {}
+    processed_config = config.copy()
+    processed_config["steps"] = []
+
+    for step in config["steps"]:
+        processed_step = step.copy()
+        step_config = processed_step.get("config", {})
+
+        # Check if this step creates a temp table
+        if step_config.get("temp", False) and step_config.get("target_table"):
+            original_table = step_config["target_table"]
+            temp_table = _generate_temp_table_name_for_config(original_table)
+            temp_mappings[original_table] = temp_table
+            step_config["actual_target_table"] = temp_table
+            processed_step["config"] = step_config
+
+        processed_config["steps"].append(processed_step)
+
+    # Now substitute table names in all SQL queries
+    for step in processed_config["steps"]:
+        step_config = step.get("config", {})
+        if "select_query" in step_config:
+            step_config["select_query"] = _substitute_table_names_in_sql(
+                step_config["select_query"], temp_mappings
+            )
+
+    # Store temp mappings in config for cleanup
+    if temp_mappings:
+        processed_config["_temp_table_mappings"] = temp_mappings
+
+    return processed_config
+
+
+def _generate_temp_table_name_for_config(original_table: str) -> str:
+    """Generate a temporary table name in the format: z_temp_{timestamp}_{random32}_{original_table}"""
+    import random
+    import string
+    from datetime import datetime
+
+    # Generate timestamp in format yyyyMMddhhmmssmmm
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")[:-3]  # Remove microseconds to milliseconds
+
+    # Generate 32-bit random integer (8 hex characters)
+    random_suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+
+    return f"z_temp_{timestamp}_{random_suffix}_{original_table}"
+
+
+def _substitute_table_names_in_sql(sql_query: str, temp_mappings: dict) -> str:
+    """Substitute original table names with temp table names in SQL query."""
+    import re
+    result = sql_query
+    for original_name, temp_name in temp_mappings.items():
+        # Use word boundaries to avoid partial matches
+        # Match table name as a whole word, possibly with schema prefix
+        pattern = r'\b(\w+\.)?' + re.escape(original_name) + r'\b'
+        result = re.sub(pattern, r'\1' + temp_name, result)
+    return result
+
+
 def load_pipeline_configs_from_dir(directory: Path) -> dict[str, dict]:
     """Load all pipeline configurations from YAML files (with optional Jinja2 templating)."""
     configs = {}
@@ -157,6 +231,8 @@ def load_pipeline_configs_from_dir(directory: Path) -> dict[str, dict]:
 
                 if pipeline_yaml.exists():
                     config = _load_yaml_with_template(pipeline_yaml)
+                    # Preprocess temp table configurations
+                    config = _preprocess_temp_tables(config)
                     name = dirname
 
                     # Add pipeline directory info for SQL file resolution
@@ -168,6 +244,8 @@ def load_pipeline_configs_from_dir(directory: Path) -> dict[str, dict]:
             name = yaml_file.stem
             if name not in configs:  # Don't overwrite if already loaded from subdirectory
                 config = _load_yaml_with_template(yaml_file)
+                # Preprocess temp table configurations
+                config = _preprocess_temp_tables(config)
                 # For legacy files, pipeline_dir is the parent directory
                 config["_pipeline_dir"] = directory
                 configs[name] = config
@@ -187,6 +265,23 @@ def create_op_for_step(step_name: str, executor_func: Callable, step_config: dic
     """
     has_inputs = step_config.get("inputs") is not None and len(step_config.get("inputs", [])) > 0
     has_outputs = step_config.get("outputs") is not None and len(step_config.get("outputs", [])) > 0
+    depends_on = step_config.get("depends_on", [])
+    
+    # Special case for cleanup step which might have multiple dependencies but no data input
+    is_cleanup = step_name == "cleanup_temp_tables"
+    
+    # Define inputs for the op
+    ins = {}
+    if is_cleanup:
+        ins["wait_for"] = In(Nothing)
+    elif has_inputs:
+        ins["data"] = In()
+    
+    # Add Nothing inputs for any dependencies that aren't the primary data input
+    # (Excluding the first dependency which is handled by 'data' or 'wait_for')
+    for i in range(1, len(depends_on)):
+        ins[f"wait_{i}"] = In(Nothing)
+
     step_cfg = step_config.get("config", {}).copy()
     # Include pipeline directory for SQL file resolution
     if "_pipeline_dir" in step_config:
@@ -200,86 +295,86 @@ def create_op_for_step(step_name: str, executor_func: Callable, step_config: dic
 
     if is_batching:
         # Batching op: produces DynamicOut
-        if has_inputs:
-            @op(name=f"{job_name}_{step_name}", ins={"data": In()}, out=DynamicOut(), tags=op_tags)
-            def step_op(context: OpExecutionContext, data):
-                result = executor_func(context, step_cfg, data)
-                for batch_key, batch_data in result:
-                    yield DynamicOutput(batch_data, mapping_key=str(batch_key))
-        else:
-            @op(name=f"{job_name}_{step_name}", out=DynamicOut(), tags=op_tags)
-            def step_op(context: OpExecutionContext):
-                result = executor_func(context, step_cfg)
-                for batch_key, batch_data in result:
-                    yield DynamicOutput(batch_data, mapping_key=str(batch_key))
-    elif has_inputs and has_outputs:
-        @op(name=f"{job_name}_{step_name}", ins={"data": In()}, out=Out(), tags=op_tags)
-        def step_op(context: OpExecutionContext, data):
-            return executor_func(context, step_cfg, data)
+        @op(name=f"{job_name}_{step_name}", ins=ins, out=DynamicOut(), tags=op_tags)
+        def step_op(context: OpExecutionContext, **kwargs):
+            data = kwargs.get("data")
+            result = executor_func(context, step_cfg, data) if has_inputs else executor_func(context, step_cfg)
+            for batch_key, batch_data in result:
+                yield DynamicOutput(batch_data, mapping_key=str(batch_key))
+        return step_op
 
-    elif has_inputs and not has_outputs:
-        @op(name=f"{job_name}_{step_name}", ins={"data": In()}, tags=op_tags)
-        def step_op(context: OpExecutionContext, data):
-            return executor_func(context, step_cfg, data)
-
-    elif not has_inputs and has_outputs:
-        @op(name=f"{job_name}_{step_name}", out=Out(), tags=op_tags)
-        def step_op(context: OpExecutionContext):
-            return executor_func(context, step_cfg)
-
-    else:
-        @op(name=f"{job_name}_{step_name}", tags=op_tags)
-        def step_op(context: OpExecutionContext):
-            return executor_func(context, step_cfg)
-
+    # Regular op
+    @op(name=f"{job_name}_{step_name}", ins=ins, out=Out() if has_outputs else None, tags=op_tags)
+    def step_op(context: OpExecutionContext, **kwargs):
+        data = kwargs.get("data")
+        return executor_func(context, step_cfg, data) if has_inputs else executor_func(context, step_cfg)
+    
     return step_op
 
 
 def make_graph_asset_from_steps(
-    job_name: str, asset_keys: list, dep_keys: set, resolved_steps: list
+    job_name: str, asset_keys: list, dep_keys: set, resolved_steps: list, temp_mappings: dict = None
 ):
     """Create a graph-backed asset (or multi-asset) from pipeline steps."""
-    
+
     if not resolved_steps:
         raise ValueError(f"No steps defined for job: {job_name}")
 
-    # Determine which steps have batching
-    def step_has_batching(step):
-        return step.get("config", {}).get("batch_size") is not None
-
-    batching_step_indices = [i for i, step in enumerate(resolved_steps) if step_has_batching(step)]
-    batching_step_count = len(batching_step_indices)
-
-    # Create ops for each step
-    step_ops_list = []
-    for i, step in enumerate(resolved_steps):
-        executor_name = step.get("executor")
-        step_name = step.get("name", f"step_{i}")
-
-        executor_func = EXECUTOR_FUNCTIONS.get(executor_name)
-        if not executor_func:
-            raise ValueError(f"Unknown executor: {executor_name}")
-
-        is_batching = step_has_batching(step)
-        step_op = create_op_for_step(step_name, executor_func, step, job_name, is_batching)
-        has_inputs = step.get("inputs") is not None and len(step.get("inputs", [])) > 0
-        has_outputs = step.get("outputs") is not None and len(step.get("outputs", [])) > 0
-
-        step_ops_list.append({
-            "name": step_name,
-            "op": step_op,
-            "has_inputs": has_inputs,
-            "has_outputs": has_outputs,
-            "config": step,
-            "executor": executor_func,
-            "is_batching": is_batching,
-        })
-
-    # Find all leaf nodes (steps that no other step depends on)
+    # Find all original leaf nodes (steps that no other step depends on)
     all_deps = set()
-    for s in step_ops_list:
-        all_deps.update(s["config"].get("depends_on", []))
-    leaf_names = [s["name"] for s in step_ops_list if s["name"] not in all_deps]
+    for s in resolved_steps:
+        all_deps.update(s.get("depends_on", []))
+    original_leaf_names = [s["name"] for s in resolved_steps if s["name"] not in all_deps]
+
+    # Add cleanup step for temp tables if any exist
+    if temp_mappings:
+        # Extract connection info from the first Trino step if available
+        trino_config = {}
+        for step in resolved_steps:
+            if "trino" in step.get("executor", ""):
+                step_config = step.get("config", {})
+                trino_config = {
+                    "host": step_config.get("host"),
+                    "port": step_config.get("port"),
+                    "user": step_config.get("user"),
+                }
+                break
+
+        cleanup_step = {
+            "name": "cleanup_temp_tables",
+            "executor": "trino_execute",
+            "depends_on": original_leaf_names, # Run after all original leaf nodes
+            "config": {
+                "host": trino_config.get("host", "trino-0a966bea-trino.trino.svc.cluster.local"),
+                "port": trino_config.get("port", 8080),
+                "user": trino_config.get("user", "dagster"),
+                "select_query": ";".join([f"DROP TABLE IF EXISTS lakehouse.test.{temp_table}"
+                                        for temp_table in temp_mappings.values()])
+            }
+        }
+        resolved_steps = resolved_steps + [cleanup_step]
+        
+        # To ensure the original leaf nodes are the ones that "finish" the asset materialization
+        # but ONLY after cleanup is done, we add a pass-through step for each original leaf node
+        # that depends on both the original leaf node AND the cleanup step.
+        for leaf_name in original_leaf_names:
+            passthrough_name = f"final_{leaf_name}"
+            # Find the original step to see if it has batching
+            original_step = next(s for s in resolved_steps if s["name"] == leaf_name)
+            is_batching = original_step.get("config", {}).get("batch_size") is not None
+            
+            resolved_steps.append({
+                "name": passthrough_name,
+                "executor": "passthrough", 
+                "depends_on": [leaf_name, "cleanup_temp_tables"],
+                "inputs": [leaf_name],
+                "config": {}
+            })
+        
+        # The NEW leaf nodes we map to assets are these pass-through steps
+        leaf_names = [f"final_{leaf_name}" for leaf_name in original_leaf_names]
+    else:
+        leaf_names = original_leaf_names
 
     # Heuristic to map leaf nodes to asset keys if we have multiple of both
     asset_key_objects = [AssetKey(ak) for ak in asset_keys]
@@ -306,23 +401,35 @@ def make_graph_asset_from_steps(
                 step_is_dynamic[name] = step_info["is_batching"]
                 continue
 
-            # Use the first dependency for the 'data' input
+            # Use the first dependency for the 'data' or 'wait_for' input
             dep_name = depends_on[0]
             dep_output = outputs[dep_name]
             
+            # Prepare all inputs for the step
+            kwargs = {}
+            if name == "cleanup_temp_tables":
+                kwargs["wait_for"] = outputs[dep_name]
+            elif step_info["has_inputs"]:
+                kwargs["data"] = outputs[dep_name]
+            
+            # Add extra dependencies as 'wait_i' inputs
+            for i in range(1, len(depends_on)):
+                kwargs[f"wait_{i}"] = outputs[depends_on[i]]
+
             if step_is_dynamic[dep_name]:
                 if executor_name == "batch_fan_in":
                     # Fan-in: collect all parallel outputs into a list
                     # This collapses the dynamic stream
-                    outputs[name] = step_op(data=dep_output.collect())
+                    outputs[name] = step_op(data=dep_output.collect(), **{k:v for k,v in kwargs.items() if k != "data"})
                     step_is_dynamic[name] = step_info["is_batching"]
                 else:
                     # Continue parallel processing using .map()
-                    outputs[name] = dep_output.map(step_op)
+                    # Map only works on the primary data input
+                    outputs[name] = dep_output.map(step_op, **{k:v for k,v in kwargs.items() if k != "data"})
                     step_is_dynamic[name] = True # Map propagates dynamic status
             else:
                 # Regular invocation
-                outputs[name] = step_op(data=dep_output) if step_info["has_inputs"] else step_op()
+                outputs[name] = step_op(**kwargs)
                 step_is_dynamic[name] = step_info["is_batching"]
 
         return outputs
@@ -425,8 +532,11 @@ def make_asset_for_pipeline(job_name: str, config: dict):
     # Resolve step dependencies for execution order
     resolved_steps = resolve_step_dependencies(steps)
 
+    # Get temp table mappings for cleanup
+    temp_mappings = config.get("_temp_table_mappings", {})
+
     # Multi-asset handles multiple parallel outputs as separate Dagster assets
-    return make_graph_asset_from_steps(job_name, asset_keys, dep_keys, resolved_steps)
+    return make_graph_asset_from_steps(job_name, asset_keys, dep_keys, resolved_steps, temp_mappings)
 
 
 def generate_definitions_for_workspace(workspace_name: str) -> Definitions:

@@ -20,6 +20,7 @@ steps:
       target_catalog: lakehouse
       target_schema: test
       target_table: temp_test
+      temp: true
 
   # Step 2: Transform from temp_test and load into final table
   - name: load_final
@@ -33,13 +34,3 @@ steps:
       target_catalog: lakehouse
       target_schema: test
       target_table: test_trino_multiple
-
-  # Step 3: Clean up temporary table
-  - name: cleanup_temp
-    executor: trino_extract
-    depends_on: ["load_final"]
-    config:
-      host: trino-0a966bea-trino.trino.svc.cluster.local
-      port: 8080
-      user: dagster
-      select_query: DROP TABLE lakehouse.test.temp_test
