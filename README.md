@@ -862,88 +862,81 @@ steps:
 
 
 
-## Local Development
+## Installation, Setup and Deployment
+
+This section covers installing prerequisites, setting up infrastructure, and deploying the pipelines.
+
+### Prerequisites
+
+#### Install Required Tools
 
 ```bash
-# Run Dagster dev server locally
-uv run dagster dev
+# macOS with Homebrew
+brew install kind kubectl helm pulumi uv
+
+# Or install individually:
+# - kind: https://kind.sigs.k8s.io/
+# - kubectl: https://kubernetes.io/docs/tasks/tools/
+# - helm: https://helm.sh/docs/intro/install/
+# - pulumi: https://www.pulumi.com/docs/get-started/install/
+# - uv: https://github.com/astral-sh/uv
 ```
 
-## Linting
-
-### Python (ruff)
+#### Install Python Dependencies
 
 ```bash
-# Check for linting errors
-uv run ruff check src/
-
-# Auto-fix linting errors
-uv run ruff check --fix src/
-
-# Format code
-uv run ruff format src/
+cd pipelines-dagster
+uv sync
 ```
 
-### YAML (yamllint)
+### Setup Infrastructure
 
-```bash
-# Lint all YAML files recursively
-uv run yamllint pipelines/
-```
+#### 1. Create Kubernetes Cluster
 
-### Pre-commit (runs on git commit)
+See [`k8s.md`](k8s.md) for detailed instructions on creating the local Kind cluster.
 
-```bash
-# Run all linters on staged files
-uv run pre-commit run
+#### 2. Deploy Trino
 
-# Run all linters on all files
-uv run pre-commit run --all-files
-```
+See [pulumi-trino repository](https://github.com/danielnuriyev/pulumi-trino) for Trino deployment.
 
-## Build Docker Image
+#### 3. Deploy Snowflake Emulator
+
+See [pulumi-snowflake-emulator repository](https://github.com/danielnuriyev/pulumi-snowflake-emulator) for Snowflake emulator deployment.
+
+#### 4. Deploy Dagster
+
+See [pulumi-dagster repository](https://github.com/danielnuriyev/pulumi-dagster) for Dagster deployment.
+
+### Build and Deploy Pipelines
+
+#### Build Docker Image
 
 ```bash
 # Build the image
 docker build -t pipelines-dagster:latest .
 
 # For kind: load the image into the cluster
-kind load docker-image pipelines-dagster:latest --name <cluster-name>
+kind load docker-image pipelines-dagster:latest --name local
 ```
 
-## Deploy to Kubernetes
-
-This image is deployed as a user code deployment via [pulumi-dagster](https://github.com/danielnuriyev/pulumi-dagster).
-
-### Full Deployment (first time or infrastructure changes)
+#### Full Deployment (first time)
 
 ```bash
-# 1. Build the Docker image
-docker build -t pipelines-dagster:latest .
-
-# 2. Load the image into kind cluster
-kind load docker-image pipelines-dagster:latest --name <cluster-name>
-
-# 3. Deploy with Pulumi (deploys Dagster + user code)
+# Deploy with Pulumi (deploys Dagster + user code)
 cd ../pulumi-dagster
 PULUMI_CONFIG_PASSPHRASE="" pulumi up --yes
 ```
 
-### Code-only Deployment (update pipelines without Pulumi)
+#### Code-only Deployment (update pipelines without Pulumi)
 
 When you only change pipeline code or YAML configs, you can skip Pulumi and just reload the workspace.
-
-If port-forward is not running, start it first:
-```bash
-kubectl port-forward svc/dagster-dagster-webserver -n dagster 3000:80 --context kind-local &
-```
 
 ```bash
 # 1. Build the new image
 docker build -t pipelines-dagster:latest .
 
-# 2. Load the image into kind cluster (replace <cluster-name> with your cluster, e.g., 'local')
-kind load docker-image pipelines-dagster:latest --name <cluster-name>
+# 2. Load the image into kind cluster
+kind load docker-image pipelines-dagster:latest --name local
 
 # 3. Delete user code deployment pods to pick up new image
 kubectl delete pods -n dagster -l app.kubernetes.io/name=dagster-user-deployments --context kind-local
@@ -958,19 +951,88 @@ curl -s -X POST http://localhost:3000/graphql \
   -d '{"query":"mutation { reloadWorkspace { __typename } }"}'
 ```
 
-**One-liner for quick deployments (replace `<cluster-name>`):**
+**One-liner for quick deployments:**
 
 ```bash
 cd /path/to/pipelines-dagster && \
 docker build -t pipelines-dagster:latest . && \
-kind load docker-image pipelines-dagster:latest --name <cluster-name> && \
+kind load docker-image pipelines-dagster:latest --name local && \
 kubectl delete pods -n dagster -l app.kubernetes.io/name=dagster-user-deployments --context kind-local && \
 sleep 25 && \
 curl -s -X POST http://localhost:3000/graphql -H "Content-Type: application/json" -d '{"query":"mutation { reloadWorkspace { __typename } }"}'
 ```
 
-**Note:** 
-- Replace `<cluster-name>` with your kind cluster name (typically `local` for this project)
+## Verify Deployment
+
+After deployment, verify that all services are running correctly:
+
+### Check Pod Status
+
+```bash
+# Check all pods are running
+kubectl get pods -A --context kind-local
+
+# Check Dagster pods specifically
+kubectl get pods -n dagster --context kind-local
+
+# Check user code deployment pods
+kubectl get pods -n dagster -l app.kubernetes.io/name=dagster-user-deployments --context kind-local
+```
+
+### Port Forward to Dagster UI
+
+```bash
+# Port-forward Dagster webserver
+kubectl port-forward svc/dagster-dagster-webserver -n dagster 3000:80 --context kind-local &
+```
+
+Then open <http://localhost:3000> in your browser.
+
+### Verify Workspace Loading
+
+```bash
+# Check workspace status via API
+curl -s -X POST http://localhost:3000/graphql \
+  -H "Content-Type: application/json" \
+  -d '{"query":"{ workspaceOrError { __typename ... on Workspace { locationEntries { name } } } }"}' | python3 -m json.tool
+```
+
+You should see two workspace locations: `trino` and `s3`.
+
+### Check Asset Materialization
+
+Visit <http://localhost:3000> and verify that:
+- The asset graph loads without errors
+- Assets are visible in the global asset graph
+- No error messages appear in the Dagster UI
+
+## Populate Databases
+
+Before running tests or using pipelines, populate the databases with test data:
+
+### Trino
+
+```bash
+# Populate test_a table with 100 records
+uv run python scripts/populate_trino.py
+
+# With custom connection settings
+uv run python scripts/populate_trino.py --host localhost --port 8080 --user dagster
+```
+
+This creates the `lakehouse.test.test_a` table with 100 records containing IDs and timestamps.
+
+### Snowflake
+
+```bash
+# Populate test_a table with 100 records (requires Snowflake emulator/server to be running)
+uv run python scripts/populate_snowflake.py
+
+# With custom connection settings
+uv run python scripts/populate_snowflake.py --host localhost --port 8088 --user snowflake --password snowflake
+```
+
+This creates the `SNOWFLAKE.PUBLIC.test_a` table with 100 records containing IDs and timestamps.
 
 ### Verify Deployment
 
@@ -1091,7 +1153,7 @@ uv run python scripts/populate_snowflake.py --host localhost --port 8088 --user 
 
 This creates the `SNOWFLAKE.PUBLIC.test_a` table with 100 records containing IDs and timestamps.
 
-## Testing
+## Run Tests
 
 ### Run Integration Tests
 
@@ -1120,37 +1182,6 @@ uv run pytest tests/integration/test_all_pipelines_k8s.py -v -s -m integration
 # Run full pipeline chain test
 uv run pytest tests/integration/test_full_pipeline.py -v -s -m integration
 ```
-
-### Available Pipeline Examples
-
-The `pipelines/` directory contains example pipelines demonstrating different patterns:
-
-#### Trino Pipelines (`pipelines/trino/`)
-
-| Pipeline | Description | Demonstrates |
-|----------|-------------|--------------|
-| `test_trino_trino` | Extract → Load (Trino → Trino) | Basic ETL, single-step pipeline |
-| `test_trino_s3` | Extract → S3 Upload | Data export to S3 |
-| `test_trino_multiple` | Multi-step Trino operations | Complex SQL workflows |
-| `test_trino_insert_select` | SQL execution with targets | INSERT SELECT operations |
-| `test_trino_batching_trino` | Large dataset batching | Memory-efficient processing |
-| `test_trino_duck_trino` | DuckDB + Trino integration | Multi-engine processing |
-| `test_trino_duck_targets` | Parallel targets + S3 export | Complex workflows |
-| `test_trino_duck_fanin_trino` | Batch processing + fan-in | Parallel batch processing |
-| `test_trino_targets` | Multiple parallel targets | Multi-asset pipelines |
-
-#### S3 Pipelines (`pipelines/s3/`)
-
-| Pipeline | Description | Demonstrates |
-|----------|-------------|--------------|
-| `test_s3_trino` | S3 CSV → Trino table | Data import from S3 |
-
-#### Snowflake Pipelines (`pipelines/snowflake/`)
-
-| Pipeline | Description | Demonstrates |
-|----------|-------------|--------------|
-| `test_snowflake_snowflake` | Extract → Load (Snowflake → Snowflake) | Basic ETL with Snowflake |
-| `test_snowflake_s3` | Extract → S3 Upload | Snowflake data export |
 
 ### Integration Tests
 
@@ -1206,6 +1237,36 @@ uv run pytest tests/integration/test_all_pipelines_local.py -v -s -m integration
 uv run pytest tests/integration/test_all_pipelines_k8s.py -v -s -m integration
 ```
 
+## Pipeline Options
+
+The `pipelines/` directory contains example pipelines demonstrating different patterns:
+
+### Trino Pipelines (`pipelines/trino/`)
+
+| Pipeline | Description | Demonstrates |
+|----------|-------------|--------------|
+| `test_trino_trino` | Extract → Load (Trino → Trino) | Basic ETL, single-step pipeline |
+| `test_trino_s3` | Extract → S3 Upload | Data export to S3 |
+| `test_trino_multiple` | Multi-step Trino operations | Complex SQL workflows |
+| `test_trino_insert_select` | SQL execution with targets | INSERT SELECT operations |
+| `test_trino_batching_trino` | Large dataset batching | Memory-efficient processing |
+| `test_trino_duck_trino` | DuckDB + Trino integration | Multi-engine processing |
+| `test_trino_duck_targets` | Parallel targets + S3 export | Complex workflows |
+| `test_trino_duck_fanin_trino` | Batch processing + fan-in | Parallel batch processing |
+| `test_trino_targets` | Multiple parallel targets | Multi-asset pipelines |
+
+### S3 Pipelines (`pipelines/s3/`)
+
+| Pipeline | Description | Demonstrates |
+|----------|-------------|--------------|
+| `test_s3_trino` | S3 CSV → Trino table | Data import from S3 |
+
+### Snowflake Pipelines (`pipelines/snowflake/`)
+
+| Pipeline | Description | Demonstrates |
+|----------|-------------|--------------|
+| `test_snowflake_snowflake` | Extract → Load (Snowflake → Snowflake) | Basic ETL with Snowflake |
+| `test_snowflake_s3` | Extract → S3 Upload | Snowflake data export |
 
 ## Related Repositories
 
