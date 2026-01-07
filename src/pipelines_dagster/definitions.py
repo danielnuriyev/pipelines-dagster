@@ -36,10 +36,15 @@ from pipelines_dagster.ops.batch_fan_in import batch_fan_in_op
 from pipelines_dagster.ops.batch_splitter import batch_splitter_op
 from pipelines_dagster.ops.duckdb_sql import duckdb_sql_op
 from pipelines_dagster.ops.s3_extract import s3_extract_op
+from pipelines_dagster.ops.snowflake_extract import snowflake_extract_op
+from pipelines_dagster.ops.snowflake_load import snowflake_load_op
 from pipelines_dagster.ops.snowflake_insert_select import snowflake_insert_select_op
 from pipelines_dagster.ops.trino_insert_select import trino_insert_select_op
 from pipelines_dagster.ops.trino_extract import trino_extract_op
 from pipelines_dagster.ops.trino_load import trino_load_op
+from pipelines_dagster.ops.dataframe_to_s3 import dataframe_to_s3_op
+from pipelines_dagster.ops.cleanup import cleanup_sources_op
+from pipelines_dagster.sources import create_source_from_config
 from pipelines_dagster.sensors import create_job_retry_sensor
 
 
@@ -123,9 +128,12 @@ EXECUTOR_FUNCTIONS: dict[str, Callable[[OpExecutionContext, dict], Any]] = {
     "s3_extract": s3_extract_op,
     "trino_extract": trino_extract_op,
     "trino_load": trino_load_op,
+    "snowflake_extract": snowflake_extract_op,
+    "snowflake_load": snowflake_load_op,
     "batch_splitter": batch_splitter_op,
     "batch_fan_in": batch_fan_in_op,
     "duckdb_sql": duckdb_sql_op,
+    "cleanup_sources": cleanup_sources_op,
     "passthrough": passthrough_op,
 }
 
@@ -168,6 +176,40 @@ def _load_pipeline_config() -> dict:
     return {}
 
 
+def _classify_step_type(executor: str) -> str:
+    """Classify a step's type based on its executor.
+
+    Args:
+        executor: The executor name from the step configuration
+
+    Returns:
+        One of: "source", "transform", "target", "executor"
+    """
+    # Source executors (data extraction)
+    if executor in ("trino_extract", "snowflake_extract", "s3_extract"):
+        return "source"
+
+    # Transform executors (data transformation)
+    elif executor in ("duckdb_sql", "batch_fan_in", "dataframe_to_s3"):
+        return "transform"
+
+    # Target executors (data loading)
+    elif executor in ("trino_load", "snowflake_load"):
+        return "target"
+
+    # Executor executors (direct SQL execution)
+    elif executor in ("trino_insert_select", "snowflake_insert_select", "cleanup_sources"):
+        return "executor"
+
+    # Special cases
+    elif executor == "passthrough":
+        return "transform"
+
+    # Default fallback for unknown executors
+    else:
+        return "executor"
+
+
 def _preprocess_temp_tables(config: dict) -> dict:
     """Preprocess pipeline config to handle temp table configurations and dependencies."""
     if "steps" not in config:
@@ -181,6 +223,11 @@ def _preprocess_temp_tables(config: dict) -> dict:
     for step in config["steps"]:
         processed_step = step.copy()
         step_config = processed_step.get("config", {})
+
+        # Classify step type based on executor
+        executor = processed_step.get("executor", "")
+        step_type = _classify_step_type(executor)
+        processed_step["type"] = step_type
 
         # Check if this step creates a temp table
         if step_config.get("temp", False) and step_config.get("target_table"):
@@ -409,16 +456,12 @@ def make_graph_asset_from_steps(
 
     # Add cleanup step for temp tables if any exist
     if temp_mappings:
-        # Extract connection info from the first Trino step if available
-        trino_config = {}
+        # Determine database type and extract connection info using Source classes
+        source_instance = None
         for step in resolved_steps:
-            if "trino" in step.get("executor", ""):
-                step_config = step.get("config", {})
-                trino_config = {
-                    "host": step_config.get("host"),
-                    "port": step_config.get("port"),
-                    "user": step_config.get("user"),
-                }
+            executor = step.get("executor", "")
+            if executor in ("trino_extract", "snowflake_extract", "s3_extract"):
+                source_instance = create_source_from_config(executor, step.get("config", {}))
                 break
 
         # Filter out leaf nodes that create temp tables - only asset-producing leaf nodes should produce assets
@@ -429,19 +472,20 @@ def make_graph_asset_from_steps(
             if not leaf_step.get("config", {}).get("temp", False):
                 asset_producing_leaf_names.append(leaf_name)
 
-        cleanup_step = {
-            "name": "cleanup_temp_tables",
-            "executor": "trino_insert_select",
-            "depends_on": original_leaf_names, # Run after all original leaf nodes
-            "config": {
-                "host": trino_config.get("host", "trino-0a966bea-trino.trino.svc.cluster.local"),
-                "port": trino_config.get("port", 8080),
-                "user": trino_config.get("user", "dagster"),
-                "select_query": ";".join([f"DROP TABLE IF EXISTS lakehouse.test.{temp_table}"
-                                        for temp_table in temp_mappings.values()])
+        # Create appropriate cleanup step using cleanup_sources executor
+        if source_instance:
+            cleanup_step = {
+                "name": "cleanup_temp_tables",
+                "executor": "cleanup_sources",
+                "type": _classify_step_type("cleanup_sources"),
+                "depends_on": original_leaf_names, # Run after all original leaf nodes
+                "config": {
+                    "db_type": source_instance.type,
+                    "connection_config": source_instance.get_connection_config(),
+                    "temp_tables": list(temp_mappings.values())
+                }
             }
-        }
-        resolved_steps = resolved_steps + [cleanup_step]
+            resolved_steps = resolved_steps + [cleanup_step]
         
         # To ensure the original leaf nodes are the ones that "finish" the asset materialization
         # but ONLY after cleanup is done, we add a pass-through step for each asset-producing leaf node
@@ -454,7 +498,8 @@ def make_graph_asset_from_steps(
             
             resolved_steps.append({
                 "name": passthrough_name,
-                "executor": "passthrough", 
+                "executor": "passthrough",
+                "type": _classify_step_type("passthrough"),
                 "depends_on": [leaf_name, "cleanup_temp_tables"],
                 "inputs": [leaf_name],
                 "config": {}
@@ -565,25 +610,25 @@ def make_graph_asset_from_steps(
         remaining_keys = asset_key_objects.copy()
         remaining_leaves = leaf_names.copy()
 
-        # Match Trino leaves to lakehouse keys
-        trino_leaves = [l for l in remaining_leaves if "trino" in l.lower()]
-        lakehouse_keys = [k for k in remaining_keys if k.path[0].lower() == "lakehouse"]
-        for i in range(min(len(trino_leaves), len(lakehouse_keys))):
-            leaf = trino_leaves[i]
-            key = lakehouse_keys[i]
-            keys_by_output_name[leaf] = key
-            remaining_leaves.remove(leaf)
-            remaining_keys.remove(key)
+        # Match storage system leaves to their corresponding keys
+        # Storage systems: step_name_prefix -> asset_key_prefix
+        # Add new storage systems here as needed
+        storage_mappings = {
+            "trino": "lakehouse",
+            "snowflake": "snowflake",
+            "s3": "s3",
+        }
 
-        # Match S3 leaves to s3 keys
-        s3_leaves = [l for l in remaining_leaves if "s3" in l.lower()]
-        s3_keys = [k for k in remaining_keys if k.path[0].lower() == "s3"]
-        for i in range(min(len(s3_leaves), len(s3_keys))):
-            leaf = s3_leaves[i]
-            key = s3_keys[i]
-            keys_by_output_name[leaf] = key
-            remaining_leaves.remove(leaf)
-            remaining_keys.remove(key)
+        for step_prefix, key_prefix in storage_mappings.items():
+            step_leaves = [l for l in remaining_leaves if step_prefix in l.lower()]
+            storage_keys = [k for k in remaining_keys if k.path[0].lower() == key_prefix]
+
+            for i in range(min(len(step_leaves), len(storage_keys))):
+                leaf = step_leaves[i]
+                key = storage_keys[i]
+                keys_by_output_name[leaf] = key
+                remaining_leaves.remove(leaf)
+                remaining_keys.remove(key)
 
         # Map remaining leaves to remaining keys by order
         for i in range(min(len(remaining_leaves), len(remaining_keys))):

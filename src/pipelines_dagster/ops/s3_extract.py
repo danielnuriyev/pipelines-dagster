@@ -1,57 +1,19 @@
-"""S3 extract operation - download CSV from S3 and return pandas DataFrame."""
+"""S3 extract operation - download CSV from S3 and return pandas DataFrame.
 
-import os
-from io import StringIO
+This module provides backward-compatible functions that delegate to the S3Source class.
+For new code, prefer using S3Source directly from pipelines_dagster.sources.
+"""
 
-import boto3
 import pandas as pd
-from botocore.client import Config as BotoConfig
 from dagster import OpExecutionContext
 
-from pipelines_dagster.retry_utils import (
-    retry_with_backoff,
-    is_retryable_s3_error,
-    get_retry_config_from_yaml
-)
+from pipelines_dagster.sources import S3Source
 
 
 def s3_extract_op(context: OpExecutionContext, config: dict) -> pd.DataFrame:
-    """Step 1: Extract CSV data from S3 and return as pandas DataFrame."""
-    # Get S3 secret from environment
-    s3_secret_key = os.environ.get("S3_SECRET_KEY", "")
-
-    # Download CSV from S3 with retry logic
-    context.log.info(f"Downloading from S3: {config['endpoint']}/{config['bucket']}/{config['key']}")
-
-    def create_s3_client():
-        return boto3.client(
-            "s3",
-            endpoint_url=config["endpoint"],
-            aws_access_key_id=config["access_key"],
-            aws_secret_access_key=s3_secret_key,
-            config=BotoConfig(signature_version="s3v4"),
-        )
-
-    def download_from_s3():
-        s3_client = create_s3_client()
-        return s3_client.get_object(Bucket=config["bucket"], Key=config["key"])
-
-    retry_config = get_retry_config_from_yaml(config, "s3")
-    try:
-        response = retry_with_backoff(
-            download_from_s3,
-            retry_config,
-            context
-        )
-    except Exception as e:
-        if not is_retryable_s3_error(e):
-            raise
-        raise
-
-    csv_content = response["Body"].read().decode("utf-8")
-
-    # Parse CSV with pandas using PyArrow data types
-    df = pd.read_csv(StringIO(csv_content), dtype_backend='pyarrow')
-    context.log.info(f"Loaded {len(df)} rows with columns: {list(df.columns)}")
-
-    return df
+    """Extract CSV data from S3 and return as pandas DataFrame.
+    
+    This function delegates to S3Source.extract() for the actual implementation.
+    """
+    source = S3Source.from_config(config)
+    return source.extract(context)
