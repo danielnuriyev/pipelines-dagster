@@ -15,10 +15,10 @@ steps:
       host: {{ trino.host }}
       port: {{ trino.port }}
       user: {{ trino.user }}
-      select_query: "SELECT * FROM {{ trino.catalog }}.{{ trino.schema }}.test_source"
+      select_query: "SELECT * FROM {{ trino.catalog }}.{{ trino.schema }}.test_trino_insert_select"
 
   # Step 2: Load into S3
-  - name: load
+  - name: dataframe_to_s3
     executor: dataframe_to_s3
     inputs: ["df"]
     depends_on: ["extract"]

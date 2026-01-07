@@ -1,24 +1,33 @@
 # Asset this pipeline produces
-asset_key: ["lakehouse", "test", "test_s3_to_trino"]
+asset_key: ["lakehouse", "test", "test_s3_trino"]
 
 # Dependencies (asset keys this depends on) - CROSS-WORKSPACE dependency!
 depends_on:
-  - ["s3", "{{ minio.bucket }}", "exports", "trino_export_csv"]
+  - ["s3", "{{ minio.bucket }}", "exports", "test_trino_s3"]
 
 # Pipeline steps
 steps:
-  - name: load
-    executor: s3_to_trino
+  # Step 1: Extract CSV data from S3 and return DataFrame
+  - name: extract
+    executor: s3_extract
+    outputs: ["df"]
     config:
       s3_endpoint: http://{{ minio.host }}:{{ minio.port }}
       s3_bucket: {{ minio.bucket }}
-      s3_key: exports/trino_export.csv
+      s3_key: exports/test_trino_s3.csv
       s3_access_key: {{ minio.access_key }}
       # s3_secret_key is provided via environment variable S3_SECRET_KEY
+
+  # Step 2: Load DataFrame into Trino table
+  - name: load
+    executor: trino_load
+    inputs: ["df"]
+    depends_on: ["extract"]
+    config:
       host: {{ trino.host }}
       port: {{ trino.port }}
       user: {{ trino.user }}
       target_catalog: {{ trino.catalog }}
       target_schema: {{ trino.schema }}
-      target_table: test_s3_to_trino
+      target_table: test_s3_trino
       recreate_table: true  # Drop and recreate table on each run

@@ -375,10 +375,10 @@ steps:
 
 ### Available Executors
 
-- **`trino_insert_select`**: Execute INSERT...SELECT in Trino
+- **`trino_insert_select`**: Execute SQL queries in Trino, optionally INSERT...SELECT into target tables
+- **`snowflake_insert_select`**: Execute SQL queries in Snowflake, optionally INSERT...SELECT into target tables
 - **`trino_extract`**: Extract data from Trino into pandas DataFrame (supports batching)
 - **`trino_load`**: Load pandas DataFrame into Trino table
-- **`trino_to_s3`**: Query Trino and export results to S3 as CSV
 - **`dataframe_to_s3`**: Upload pandas DataFrame to S3 as CSV
 
     ```yaml
@@ -394,7 +394,7 @@ steps:
         s3_access_key: admin
         # s3_secret_key provided via environment variable
     ```
-- **`s3_to_trino`**: Load CSV from S3 into Trino table
+- **`s3_extract`**: Download CSV from S3 and return as DataFrame
 - **`duckdb_sql`**: Execute SQL queries on DataFrames using DuckDB
 - **`batch_splitter`**: Subdivide a DataFrame into smaller batches for nested batching
 
@@ -539,10 +539,11 @@ steps:
     concurrency_key: "trino_writes"
 ```
 
-- **`trino_insert_select`**: Execute INSERT...SELECT in Trino
+- **`trino_insert_select`**: Execute SQL queries in Trino, optionally INSERT...SELECT into target tables
+- **`snowflake_insert_select`**: Execute SQL queries in Snowflake, optionally INSERT...SELECT into target tables
 
     ```yaml
-    # Inline SQL
+    # With target table: INSERT INTO or CREATE TABLE AS SELECT
     - name: load
       executor: trino_insert_select
       config:
@@ -550,6 +551,12 @@ steps:
         target_catalog: lakehouse
         target_schema: test
         target_table: target_table
+
+    # Without target table: Execute query directly (like DDL operations)
+    - name: cleanup
+      executor: trino_insert_select
+      config:
+        select_query: DROP TABLE IF EXISTS lakehouse.test.temp_table
 
     # SQL from file (relative to pipeline directory)
     - name: load

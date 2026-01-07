@@ -5,8 +5,8 @@ This test:
 1. Deploys the code to Dagster
 2. Disables the schedule of test_a asset
 3. Materializes test_a asset and verifies data in test_b table
-4. Waits for auto-materialization to trigger trino_to_s3 and verifies S3 data
-5. Waits for auto-materialization to trigger s3_to_trino and verifies data
+4. Waits for auto-materialization to trigger test_trino_s3 and verifies S3 data
+    5. Waits for auto-materialization to trigger test_s3_trino and verifies data
 6. Re-enables the schedule of test_a asset
 """
 
@@ -38,7 +38,7 @@ S3_ENDPOINT = os.environ.get("S3_ENDPOINT", "http://localhost:30900")
 S3_ACCESS_KEY = os.environ.get("S3_ACCESS_KEY", "admin")
 S3_SECRET_KEY = os.environ.get("S3_SECRET_KEY", "")
 S3_BUCKET = os.environ.get("S3_BUCKET", "warehouse")
-S3_EXPORT_KEY = "exports/trino_export.csv"
+S3_EXPORT_KEY = "exports/test_trino_s3.csv"
 S3_IMPORT_KEY = "imports/data.csv"
 
 # Deployment configuration
@@ -52,8 +52,8 @@ REPOSITORY_NAME = "__repository__"
 
 # Asset keys
 ASSET_TEST_B = ["lakehouse", "test", "test_b"]
-ASSET_TRINO_EXPORT = ["s3", "warehouse", "exports", "trino_export_csv"]
-ASSET_S3_DATA = ["lakehouse", "test", "s3_data"]
+ASSET_TRINO_EXPORT = ["s3", "warehouse", "exports", "test_trino_s3"]
+ASSET_S3_DATA = ["lakehouse", "test", "test_s3_trino"]
 
 # Schedule name
 TEST_TRINO_TO_TRINO_SCHEDULE = "test_trino_insert_select_schedule"
@@ -427,7 +427,7 @@ def setup_test_data():
 
     # Clean up downstream tables
     print("Cleaning up downstream tables...")
-    for table in ["test_b", "test_c", "s3_data"]:
+    for table in ["test_b", "test_c", "test_s3_trino"]:
         cursor.execute(f"DROP TABLE IF EXISTS {TRINO_CATALOG}.{TRINO_SCHEMA}.{table}")
         cursor.fetchall()
 
@@ -526,10 +526,10 @@ def test_full_pipeline_chain(test_environment):
     1. Stop test_a schedule
     2. Materialize test_a (produces test_b)
     3. Verify test_b data
-    4. Wait for auto-materialization of trino_to_s3
+    4. Wait for auto-materialization of test_trino_s3
     5. Verify S3 export data
-    6. Wait for auto-materialization of s3_to_trino
-    7. Verify s3_data table
+    6. Wait for auto-materialization of test_s3_trino
+    7. Verify test_s3_trino table
     8. Re-enable test_a schedule
     """
     print("\n" + "=" * 60)
@@ -563,24 +563,24 @@ def test_full_pipeline_chain(test_environment):
         # Step 4: Wait for auto-materialization of test_trino_s3
         print("\n--- Step 4: Wait for test_trino_s3 auto-materialization ---")
         status = wait_for_asset_materialization(ASSET_TRINO_EXPORT, before_test)
-        assert status == "SUCCESS", f"test_trino_s3 failed with status: {status}"
-        print("test_trino_s3 completed successfully!")
+        assert status == "SUCCESS", f"test_trino_s3 auto-materialization failed with status: {status}"
+        print("test_trino_s3 auto-materialization completed successfully!")
 
         # Step 5: Verify S3 export data
         print("\n--- Step 5: Verify S3 export data ---")
         s3_rows = verify_s3_csv(S3_EXPORT_KEY, expected_row_count=2)
         print(f"Found {len(s3_rows)} rows in S3 export: {s3_rows}")
 
-        # Step 6: Wait for auto-materialization of test_s3_to_trino
-        print("\n--- Step 6: Wait for test_s3_to_trino auto-materialization ---")
+        # Step 6: Wait for auto-materialization of test_s3_trino
+        print("\n--- Step 6: Wait for test_s3_trino auto-materialization ---")
         status = wait_for_asset_materialization(ASSET_S3_DATA, before_test)
-        assert status == "SUCCESS", f"test_s3_to_trino failed with status: {status}"
-        print("test_s3_to_trino completed successfully!")
+        assert status == "SUCCESS", f"test_s3_trino failed with status: {status}"
+        print("test_s3_trino completed successfully!")
 
-        # Step 7: Verify s3_data table
-        print("\n--- Step 7: Verify s3_data table ---")
-        final_rows = verify_table_data("s3_data", expected_row_count=2)
-        print(f"Found {len(final_rows)} rows in s3_data: {final_rows}")
+        # Step 7: Verify test_s3_trino table
+        print("\n--- Step 7: Verify test_s3_trino table ---")
+        final_rows = verify_table_data("test_s3_trino", expected_row_count=2)
+        print(f"Found {len(final_rows)} rows in test_s3_trino: {final_rows}")
 
         print("\n" + "=" * 60)
         print("ALL VERIFICATIONS PASSED!")

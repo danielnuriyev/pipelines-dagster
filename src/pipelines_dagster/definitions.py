@@ -35,11 +35,11 @@ from dagster import (
 from pipelines_dagster.ops.batch_fan_in import batch_fan_in_op
 from pipelines_dagster.ops.batch_splitter import batch_splitter_op
 from pipelines_dagster.ops.duckdb_sql import duckdb_sql_op
-from pipelines_dagster.ops.s3_to_trino import s3_to_trino_op
+from pipelines_dagster.ops.s3_extract import s3_extract_op
+from pipelines_dagster.ops.snowflake_insert_select import snowflake_insert_select_op
 from pipelines_dagster.ops.trino_insert_select import trino_insert_select_op
 from pipelines_dagster.ops.trino_extract import trino_extract_op
 from pipelines_dagster.ops.trino_load import trino_load_op
-from pipelines_dagster.ops.trino_execute import trino_execute_op
 from pipelines_dagster.sensors import create_job_retry_sensor
 
 
@@ -103,7 +103,6 @@ def resolve_step_dependencies(steps: List[Dict[str, Any]]) -> List[Dict[str, Any
         raise ValueError(f"Circular dependency detected involving steps: {remaining}")
 
     return result
-from pipelines_dagster.ops.trino_to_s3 import trino_to_s3_op
 from pipelines_dagster.ops.dataframe_to_s3 import dataframe_to_s3_op
 
 # Base directory containing pipeline YAML configurations
@@ -119,12 +118,11 @@ def passthrough_op(context: OpExecutionContext, config: dict, data: Any = None, 
 # Map executor names to their implementation functions
 EXECUTOR_FUNCTIONS: dict[str, Callable[[OpExecutionContext, dict], Any]] = {
     "trino_insert_select": trino_insert_select_op,
-    "trino_to_s3": trino_to_s3_op,
+    "snowflake_insert_select": snowflake_insert_select_op,
     "dataframe_to_s3": dataframe_to_s3_op,
-    "s3_to_trino": s3_to_trino_op,
+    "s3_extract": s3_extract_op,
     "trino_extract": trino_extract_op,
     "trino_load": trino_load_op,
-    "trino_execute": trino_execute_op,
     "batch_splitter": batch_splitter_op,
     "batch_fan_in": batch_fan_in_op,
     "duckdb_sql": duckdb_sql_op,
@@ -337,6 +335,16 @@ def create_op_for_step(step_name: str, executor_func: Callable, step_config: dic
     has_outputs = step_config.get("outputs") is not None and len(step_config.get("outputs", [])) > 0
     depends_on = step_config.get("depends_on", [])
     
+    # If this step is depended upon by other steps, it must have an output
+    # Check if this step name appears in any other step's depends_on
+    # (This will be checked later when building step_ops_list, but we need to ensure outputs here)
+    # For now, if a step creates a temp table but has no outputs, we'll give it an output
+    # so dependent steps can properly depend on it
+    creates_temp = step_config.get("config", {}).get("temp", False)
+    if creates_temp and not has_outputs:
+        # Temp table steps need outputs so dependent steps can depend on them
+        has_outputs = True
+    
     # Special case for cleanup step which might have multiple dependencies but no data input
     is_cleanup = step_name == "cleanup_temp_tables"
     
@@ -346,6 +354,9 @@ def create_op_for_step(step_name: str, executor_func: Callable, step_config: dic
         ins["wait_for"] = In(Nothing)
     elif has_inputs:
         ins["data"] = In()
+    elif depends_on:
+        # If step has dependencies but no explicit inputs, add wait_for to establish dependency
+        ins["wait_for"] = In(Nothing)
     
     # Add Nothing inputs for any dependencies that aren't the primary data input
     # (Excluding the first dependency which is handled by 'data' or 'wait_for')
@@ -410,9 +421,17 @@ def make_graph_asset_from_steps(
                 }
                 break
 
+        # Filter out leaf nodes that create temp tables - only asset-producing leaf nodes should produce assets
+        asset_producing_leaf_names = []
+        for leaf_name in original_leaf_names:
+            leaf_step = next(s for s in resolved_steps if s["name"] == leaf_name)
+            # Only include steps that don't create temp tables as asset-producing
+            if not leaf_step.get("config", {}).get("temp", False):
+                asset_producing_leaf_names.append(leaf_name)
+
         cleanup_step = {
             "name": "cleanup_temp_tables",
-            "executor": "trino_execute",
+            "executor": "trino_insert_select",
             "depends_on": original_leaf_names, # Run after all original leaf nodes
             "config": {
                 "host": trino_config.get("host", "trino-0a966bea-trino.trino.svc.cluster.local"),
@@ -425,9 +444,9 @@ def make_graph_asset_from_steps(
         resolved_steps = resolved_steps + [cleanup_step]
         
         # To ensure the original leaf nodes are the ones that "finish" the asset materialization
-        # but ONLY after cleanup is done, we add a pass-through step for each original leaf node
+        # but ONLY after cleanup is done, we add a pass-through step for each asset-producing leaf node
         # that depends on both the original leaf node AND the cleanup step.
-        for leaf_name in original_leaf_names:
+        for leaf_name in asset_producing_leaf_names:
             passthrough_name = f"final_{leaf_name}"
             # Find the original step to see if it has batching
             original_step = next(s for s in resolved_steps if s["name"] == leaf_name)
@@ -442,12 +461,43 @@ def make_graph_asset_from_steps(
             })
         
         # The NEW leaf nodes we map to assets are these pass-through steps
-        leaf_names = [f"final_{leaf_name}" for leaf_name in original_leaf_names]
+        # Only create pass-through steps for asset-producing leaf nodes (not temp table creators)
+        leaf_names = [f"final_{leaf_name}" for leaf_name in asset_producing_leaf_names]
     else:
-        leaf_names = original_leaf_names
+        # Filter out leaf nodes that create temp tables even when no temp_mappings exist
+        leaf_names = [
+            name for name in original_leaf_names
+            if not next((s for s in resolved_steps if s["name"] == name), {}).get("config", {}).get("temp", False)
+        ]
 
     # Heuristic to map leaf nodes to asset keys if we have multiple of both
     asset_key_objects = [AssetKey(ak) for ak in asset_keys]
+    
+    # Build step_ops_list by creating ops for each resolved step
+    step_ops_list = []
+    for step in resolved_steps:
+        step_name = step["name"]
+        executor_name = step.get("executor")
+        if not executor_name:
+            raise ValueError(f"Missing executor for step: {step_name}")
+        
+        executor_func = EXECUTOR_FUNCTIONS.get(executor_name)
+        if not executor_func:
+            raise ValueError(f"Unknown executor: {executor_name} for step: {step_name}")
+        
+        # Check if this is a batching step
+        is_batching = step.get("config", {}).get("batch_size") is not None
+        
+        # Create the op for this step
+        step_op = create_op_for_step(step_name, executor_func, step, job_name, is_batching)
+        
+        step_ops_list.append({
+            "name": step_name,
+            "op": step_op,
+            "is_batching": is_batching,
+            "config": step,
+            "has_inputs": step.get("inputs") is not None and len(step.get("inputs", [])) > 0
+        })
     
     # Internal function to define the graph logic
     def define_graph():
@@ -481,6 +531,11 @@ def make_graph_asset_from_steps(
                 kwargs["wait_for"] = outputs[dep_name]
             elif step_info["has_inputs"]:
                 kwargs["data"] = outputs[dep_name]
+            else:
+                # Even if step doesn't have explicit inputs, if it depends on another step,
+                # we need to pass the dependency to establish the connection in the graph
+                # Use 'wait_for' (Nothing input) to establish dependency without data flow
+                kwargs["wait_for"] = outputs[dep_name]
             
             # Add extra dependencies as 'wait_i' inputs
             for i in range(1, len(depends_on)):
@@ -565,7 +620,8 @@ def make_graph_asset_from_steps(
                     return list(kwargs.values())[-1]
                 return join_outputs(**{f"in_{i}": outputs[name] for i, name in enumerate(leaf_names)})
         
-        return outputs[step_ops_list[-1]["name"]]
+        # Return the output of the first (and only) leaf node
+        return outputs[leaf_names[0]]
 
     return graph_backed_asset
 

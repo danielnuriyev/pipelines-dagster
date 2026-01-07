@@ -1,12 +1,12 @@
-"""Trino INSERT SELECT operation."""
+"""Snowflake INSERT SELECT operation."""
 
-import trino
+import snowflake.connector
 from pathlib import Path
 from dagster import OpExecutionContext
 
 from pipelines_dagster.retry_utils import (
     retry_with_backoff,
-    is_retryable_trino_error,
+    is_retryable_snowflake_error,
     get_retry_config_from_yaml
 )
 
@@ -66,57 +66,60 @@ def _load_sql_query(config: dict, context: OpExecutionContext, pipeline_dir: Pat
         raise ValueError("Must specify either 'sql_query'/'select_query' or 'sql_file' in config")
 
 
-def trino_insert_select_op(context: OpExecutionContext, config: dict):
-    """Execute SQL queries in Trino with optional INSERT INTO functionality.
+def snowflake_insert_select_op(context: OpExecutionContext, config: dict):
+    """Execute SQL queries in Snowflake with optional INSERT INTO functionality.
 
     SQL can be specified either inline (select_query/sql_query) or from a file (sql_file).
 
-    If target_catalog, target_schema, and target_table are specified:
+    If target_database, target_schema, and target_table are specified:
     - Executes INSERT INTO target_table SELECT ... or CREATE TABLE AS SELECT ...
     - If temp: True is specified, creates a temporary table with unique naming
 
     If no target is specified:
-    - Simply executes the SQL query directly
+    - Simply executes the SQL query directly (like general SQL execution)
     """
-    context.log.info(f"Connecting to Trino at {config['host']}:{config['port']}")
+    context.log.info(f"Connecting to Snowflake at {config['account']}")
 
     # Load SQL query from config or file
     select_query = _load_sql_query(config, context)
 
-    def connect_trino():
-        return trino.dbapi.connect(
-            host=config["host"],
-            port=config["port"],
+    def connect_snowflake():
+        return snowflake.connector.connect(
+            account=config["account"],
             user=config["user"],
+            password=config["password"],
+            warehouse=config.get("warehouse"),
+            database=config.get("database"),
+            schema=config.get("schema")
         )
 
-    retry_config = get_retry_config_from_yaml(config, "trino")
+    retry_config = get_retry_config_from_yaml(config, "snowflake")
     try:
         conn = retry_with_backoff(
-            connect_trino,
+            connect_snowflake,
             retry_config,
             context
         )
     except Exception as e:
-        if not is_retryable_trino_error(e):
+        if not is_retryable_snowflake_error(e):
             raise
         raise
     cursor = conn.cursor()
 
     # Check if target parameters are provided
-    has_target = all(key in config for key in ['target_catalog', 'target_schema', 'target_table'])
+    has_target = all(key in config for key in ['target_database', 'target_schema', 'target_table'])
 
     if has_target:
         # INSERT INTO / CREATE TABLE AS logic
         # Use actual table name if it was preprocessed for temp tables
         actual_table = config.get("actual_target_table", config.get("target_table"))
 
-        target_full_name = f"{config['target_catalog']}.{config['target_schema']}.{actual_table}"
+        target_full_name = f"{config['target_database']}.{config['target_schema']}.{actual_table}"
 
         # Check if target table exists
         cursor.execute(f"""
-            SELECT table_name FROM {config['target_catalog']}.information_schema.tables
-            WHERE table_catalog = '{config['target_catalog']}'
+            SELECT table_name FROM {config['target_database']}.information_schema.tables
+            WHERE table_catalog = '{config['target_database']}'
             AND table_schema = '{config['target_schema']}'
             AND table_name = '{actual_table}'
         """)

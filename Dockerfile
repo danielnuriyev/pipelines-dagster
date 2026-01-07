@@ -2,6 +2,12 @@ FROM ghcr.io/astral-sh/uv:python3.14-bookworm-slim
 
 WORKDIR /app
 
+# Install build dependencies for snowflake-connector-python
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy project files
 COPY pyproject.toml .
 COPY src/ src/

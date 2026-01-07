@@ -1,0 +1,32 @@
+# Asset this pipeline produces (no dots allowed in keys)
+asset_key: ["s3", "{{ minio.bucket }}", "exports", "test_snowflake_s3"]
+
+# Dependencies (asset keys this depends on)
+# depends_on: []
+
+# Pipeline steps
+steps:
+  # Step 1: Extract from Snowflake that returns dataframes
+  - name: extract
+    executor: snowflake_extract
+    outputs: ["df"]
+    config:
+      account: {{ snowflake.account }}
+      user: {{ snowflake.user }}
+      password: {{ snowflake.password }}
+      warehouse: {{ snowflake.warehouse }}
+      database: {{ snowflake.database }}
+      schema: {{ snowflake.schema }}
+      select_query: SELECT * FROM {{ snowflake.database }}.{{ snowflake.schema }}.test_source
+
+  # Step 2: Load into S3
+  - name: dataframe_to_s3
+    executor: dataframe_to_s3
+    inputs: ["df"]
+    depends_on: ["extract"]
+    config:
+      s3_endpoint: http://{{ minio.host }}:{{ minio.port }}
+      s3_bucket: {{ minio.bucket }}
+      s3_key: exports/{{ snowflake.schema }}_snowflake_s3.csv
+      s3_access_key: {{ minio.access_key }}
+      # s3_secret_key is provided via environment variable S3_SECRET_KEY

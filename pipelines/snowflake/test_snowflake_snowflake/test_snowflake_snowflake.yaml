@@ -1,0 +1,54 @@
+# Asset this pipeline produces
+asset_key: ["snowflake", "{{ snowflake.database }}", "{{ snowflake.schema }}", "test_snowflake_snowflake"]
+
+# Dependencies (asset keys this depends on)
+# depends_on: []
+
+# Job-level concurrency (max concurrent ops in this job)
+job_concurrency: 1
+
+# Job retry configuration
+job_retry:
+  max_attempts: 3          # Maximum retry attempts
+  max_delay: 3600          # Maximum delay (1 hour)
+
+# Pipeline steps - extract from Snowflake and load to Snowflake
+steps:
+  # Step 1: Extract from Snowflake (no batching)
+  - name: extract
+    executor: snowflake_extract
+    outputs: ["df"]
+    concurrency_key: "snowflake_reads"  # Limit concurrent Snowflake reads
+    config:
+      account: {{ snowflake.account }}
+      user: {{ snowflake.user }}
+      password: {{ snowflake.password }}
+      warehouse: {{ snowflake.warehouse }}
+      database: {{ snowflake.database }}
+      schema: {{ snowflake.schema }}
+      select_query: SELECT * FROM {{ snowflake.database }}.{{ snowflake.schema }}.test_source
+      retry:  # Custom retry configuration
+        max_attempts: 3  # Try up to 3 times
+        base_delay: 1.0   # Wait 1s, 2s, 4s
+        max_delay: 60.0   # Cap delay at 60 seconds
+
+  # Step 2: Load data into Snowflake
+  - name: load
+    executor: snowflake_load
+    inputs: ["df"]
+    depends_on: ["extract"]  # Depends on extract step
+    concurrency_key: "snowflake_writes"  # Limit concurrent Snowflake writes
+    config:
+      account: {{ snowflake.account }}
+      user: {{ snowflake.user }}
+      password: {{ snowflake.password }}
+      warehouse: {{ snowflake.warehouse }}
+      database: {{ snowflake.database }}
+      schema: {{ snowflake.schema }}
+      target_database: {{ snowflake.database }}
+      target_schema: {{ snowflake.schema }}
+      target_table: test_snowflake_snowflake
+      retry:  # Custom retry configuration
+        max_attempts: 3  # Try up to 3 times
+        base_delay: 1.0   # Wait 1s, 2s, 4s
+        max_delay: 60.0   # Cap delay at 60 seconds
