@@ -124,8 +124,10 @@ def trino_extract_op(context: OpExecutionContext, config: dict):
     conn.close()
 
     df = pd.DataFrame(rows, columns=columns)
+    # Convert to PyArrow data types for consistency
+    df = df.convert_dtypes(dtype_backend='pyarrow')
     context.log.info(f"Extracted {len(df)} rows with columns: {list(df.columns)}")
-    context.log.info(f"Returning DataFrame with type: {type(df)}")
+    context.log.info(f"Returning DataFrame with PyArrow types: {type(df)}")
 
     return df
 
@@ -187,6 +189,8 @@ def _extract_batches(context: OpExecutionContext, config: dict):
         columns = [desc[0] for desc in cursor.description]
 
         df = pd.DataFrame(rows, columns=columns)
+        # Convert to PyArrow data types for consistency
+        df = df.convert_dtypes(dtype_backend='pyarrow')
         yield current, df
 
         cursor.close()

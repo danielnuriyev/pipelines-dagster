@@ -93,6 +93,8 @@ def duckdb_sql_op(context: OpExecutionContext, config: dict, df: pd.DataFrame) -
 
     con.close()
 
+    # Convert to PyArrow data types for consistency
+    result_df = result_df.convert_dtypes(dtype_backend='pyarrow')
     context.log.info(f"DuckDB query returned {len(result_df)} rows with columns: {list(result_df.columns)}")
 
     return result_df

@@ -50,8 +50,8 @@ def s3_extract_op(context: OpExecutionContext, config: dict) -> pd.DataFrame:
 
     csv_content = response["Body"].read().decode("utf-8")
 
-    # Parse CSV with pandas
-    df = pd.read_csv(StringIO(csv_content))
+    # Parse CSV with pandas using PyArrow data types
+    df = pd.read_csv(StringIO(csv_content), dtype_backend='pyarrow')
     context.log.info(f"Loaded {len(df)} rows with columns: {list(df.columns)}")
 
     return df

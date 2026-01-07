@@ -19,13 +19,18 @@ def batch_fan_in_op(context: OpExecutionContext, config: dict, data: List[pd.Dat
     """
     if not data:
         context.log.info("Fan-in: received empty list of DataFrames")
-        return pd.DataFrame()
+        empty_df = pd.DataFrame()
+        # Convert to PyArrow data types for consistency
+        return empty_df.convert_dtypes(dtype_backend='pyarrow')
 
     context.log.info(f"Fan-in: combining {len(data)} batch results")
-    
+
     # Concatenate all DataFrames in the list
     combined_df = pd.concat(data, ignore_index=True)
-    
+
+    # Ensure PyArrow data types are maintained after concatenation
+    combined_df = combined_df.convert_dtypes(dtype_backend='pyarrow')
+
     context.log.info(f"Fan-in: produced combined DataFrame with {len(combined_df)} rows, {len(combined_df.columns)} columns")
-    
+
     return combined_df
