@@ -68,25 +68,69 @@ This project uses **Dagster Assets** with auto-materialization for cross-workspa
 Create `dagster.yaml` in your project root to configure global concurrency limits:
 
 ```yaml
-# Global concurrency limits
-run_coordinator:
-  module: dagster.core.run_coordinator
-  class: QueuedRunCoordinator
-  config:
-    max_concurrent_runs: 5
+# Dagster instance configuration
+# This file controls global Dagster settings like concurrency limits
 
-# Operation-level concurrency limits
+# Concurrency limits for runs and tagged operations
 concurrency:
-  default_limit:
-    - key: "trino_reads"
-      limit: 2
-    - key: "trino_writes"
-      limit: 2
-    - key: "s3_writes"
-      limit: 3
-    - key: "data_processing"
-      limit: 4
+  runs:
+    max_concurrent_runs: 1  # Maximum concurrent job runs across the instance
+    tag_concurrency_limits:
+      # Database operations
+      - key: "trino_extract"
+        limit: 2  # Max concurrent Trino extract operations
+      - key: "trino_load"
+        limit: 2  # Max concurrent Trino load operations
+      - key: "trino_insert_select"
+        limit: 1  # Max concurrent Trino insert/select operations
+      - key: "snowflake_extract"
+        limit: 2  # Max concurrent Snowflake extract operations
+      - key: "snowflake_load"
+        limit: 2  # Max concurrent Snowflake load operations
+
+      # S3 operations
+      - key: "s3_extract"
+        limit: 2  # Max concurrent S3 extract operations
+      - key: "dataframe_to_s3"
+        limit: 2  # Max concurrent S3 upload operations
+
+      # Processing operations
+      - key: "duckdb_sql"
+        limit: 4  # Max concurrent DuckDB operations
+      - key: "batch_fan_in"
+        limit: 2  # Max concurrent batch fan-in operations
+
+      # Legacy keys (keeping for compatibility)
+      - key: "trino_reads"
+        limit: 1  # Legacy Trino reads limit
+      - key: "trino_writes"
+        limit: 1  # Legacy Trino writes limit
+      - key: "snowflake_reads"
+        limit: 1  # Legacy Snowflake reads limit
+      - key: "snowflake_writes"
+        limit: 1  # Legacy Snowflake writes limit
+      - key: "s3_operations"
+        limit: 1  # Legacy S3 operations limit
+      - key: "data_processing"
+        limit: 2  # Legacy data processing limit
+      - key: "s3_writes"
+        limit: 1  # Legacy S3 writes limit
 ```
+
+#### Configuration Breakdown
+
+**Run Concurrency:**
+- `max_concurrent_runs`: Maximum number of job runs that can execute simultaneously across the entire Dagster instance
+
+**Tag Concurrency Limits:**
+- `tag_concurrency_limits`: Array of concurrency rules based on operation tags
+- Each rule specifies a `key` (tag name) and `limit` (max concurrent operations)
+- Operations with matching `concurrency_key` values are subject to these limits
+
+**Concurrency Key Matching:**
+- Pipeline steps use `concurrency_key: "executor_name"` to match these limits
+- Keys correspond to executor operation types for resource management
+- Legacy keys maintained for backward compatibility during transition
 
 ```bash
 # Install dependencies
@@ -106,11 +150,15 @@ Pipelines are defined in YAML files under the `pipelines/` directory. Each pipel
 
 ### Central Configuration & Jinja2 Templating
 
-Pipeline configurations use **centralized configuration management** via `pipelines/config.yaml` combined with **Jinja2 templating** for dynamic configuration. All pipeline YAML files support full Jinja2 templating with access to configuration values and environment variables.
+Pipeline configurations use **centralized configuration management** via `pipelines/config.yaml` combined with **Jinja2 templating** for dynamic configuration. All pipeline YAML files support full Jinja2 templating with access to configuration values.
 
 **Configuration Structure:**
 ```yaml
 # pipelines/config.yaml
+# Central configuration for all pipelines
+# These values are available as Jinja2 variables in pipeline YAML files
+
+# Trino configuration
 trino:
   host: trino-0a966bea-trino.trino.svc.cluster.local
   port: 8080
@@ -118,12 +166,29 @@ trino:
   catalog: lakehouse
   schema: test
 
+# Snowflake emulator configuration
+snowflake:
+  host: snowflake-emulator.trino.svc.cluster.local
+  port: 8088
+  user: snowflake
+  password: snowflake
+  database: SNOWFLAKE
+  schema: PUBLIC
+  warehouse: COMPUTE_WH
+
+# MinIO/S3 configuration
 minio:
   host: minio-ec2bcee8.trino.svc.cluster.local
   port: 9000
   bucket: warehouse
   access_key: admin
+  # secret_key should be provided via environment variable S3_SECRET_KEY
 ```
+
+**Security Note:**
+- Sensitive values like passwords and secret keys should **not** be stored in `config.yaml`
+- Use environment variables or secure secret management systems instead
+- The `secret_key` field is intentionally omitted from config files
 
 **Jinja2 Template Usage:**
 Pipeline YAML files use standard Jinja2 syntax to access configuration values:
@@ -138,22 +203,37 @@ steps:
       port: {{ trino.port }}
       user: {{ trino.user }}
       select_query: SELECT * FROM {{ trino.catalog }}.{{ trino.schema }}.my_table
-      target_catalog: {{ trino.catalog }}
-      target_schema: {{ trino.schema }}
+      catalog: {{ trino.catalog }}
+      schema: {{ trino.schema }}
 
   - name: upload
     executor: dataframe_to_s3
     config:
       endpoint: http://{{ minio.host }}:{{ minio.port }}
       bucket: {{ minio.bucket }}
+      key: exports/my_data.csv
       access_key: {{ minio.access_key }}
 ```
 
 **Template Context Available:**
 - `trino.*`: All Trino configuration values
+- `snowflake.*`: All Snowflake configuration values
 - `minio.*`: All MinIO configuration values
 - `config.*`: Access to entire config structure
-- All environment variables (`os.environ`)
+
+**Advanced Templating:**
+```yaml
+# pipelines/advanced_pipeline/advanced_pipeline.yaml
+steps:
+  - name: extract
+    executor: trino_extract
+    config:
+      # Use config values with defaults
+      host: {{ trino.host }}
+      port: {{ trino.port }}
+      user: {{ trino.user }}
+      select_query: SELECT * FROM {{ trino.catalog }}.{{ trino.schema }}.my_table
+```
 
 **Advanced Templating:**
 ```yaml
@@ -173,26 +253,6 @@ steps:
       {% endif %}
 ```
 
-**Environment Variables:**
-- `TRINO_HOST`: Override Trino server hostname
-- `TRINO_PORT`: Override Trino server port
-- `TRINO_USER`: Override Trino username
-- `TRINO_CATALOG`: Override default Trino catalog
-- `TRINO_SCHEMA`: Override default Trino schema
-- `S3_SECRET_KEY`: MinIO secret key (not in config.yaml for security)
-- `ENVIRONMENT`: Environment name for conditional logic
-- `TABLE_NAME`: Dynamic table name
-
-**Example Usage:**
-```bash
-# Override configuration for different environments
-export TRINO_HOST=my-production-trino.com
-export TRINO_CATALOG=production_catalog
-export ENVIRONMENT=production
-
-# Run Dagster with custom configuration
-uv run dagster dev
-```
 
 ### Basic Structure
 
@@ -345,8 +405,8 @@ steps:
       # ... other config ...
       retry:
         max_attempts: 5      # Number of retry attempts (default: 3)
-        base_delay: 3s       # Initial delay (default: 2s for Trino, 1s for S3, supports: s/m/h/d/w)
-        max_delay: 1m        # Maximum delay cap (default: 30s for Trino, 20s for S3, supports: s/m/h/d/w)
+        base_delay: 3s       # Initial delay (default: 2s for Trino/Snowflake, 1s for S3)
+        max_delay: 1m        # Maximum delay cap (default: 30s for Trino/Snowflake, 20s for S3)
         backoff_factor: 2.0  # Exponential backoff multiplier (default: 2.0)
         jitter: true         # Add random jitter to prevent thundering herd (default: true)
 ```
@@ -456,14 +516,21 @@ concurrency_key: "gpu_operations"  # GPU-accelerated processing
 # Job retry configuration - simplified YAML
 job_retry:
   max_attempts: 3          # Maximum retry attempts (default: 3)
-  max_delay: 3600          # Maximum delay cap in seconds (default: 3600)
+  max_delay: 1h            # Maximum delay cap (default: 1h, supports time units)
 ```
 
-**Hardcoded defaults:**
-- `base_delay`: 60 seconds (1 minute)
+**Service-Specific Defaults:**
+
+| Service | base_delay | max_delay | Description |
+|---------|------------|-----------|-------------|
+| **Trino** | `2s` | `30s` | Database queries and connections |
+| **S3** | `1s` | `20s` | File uploads/downloads |
+| **Snowflake** | `2s` | `30s` | Database queries and connections |
+
+**Common Settings:**
+- `max_attempts`: 3 (configurable)
 - `backoff_factor`: 2.0 (exponential backoff)
-- `retry_on_memory_failure`: true (OOM failures get memory scaling)
-- `memory_multiplier`: 2.0 (double memory for OOM failures)
+- `jitter`: true (prevents thundering herd)
 
 **Intelligent Failure Detection:**
 - **Out of Memory (OOM)**: Automatically retries with doubled memory allocation
@@ -488,21 +555,48 @@ job_retry:
 
 ### Concurrency Configuration
 
-Control how many operations run simultaneously:
+Control how many operations run simultaneously across the Dagster instance:
+
+#### Instance-Level Concurrency (dagster.yaml)
+
+Configure global concurrency limits in `dagster.yaml`:
 
 ```yaml
-# Global concurrency limits (in dagster.yaml)
+# Concurrency limits for runs and tagged operations
 concurrency:
-  default_limit:
-    - key: "trino_reads"
-      limit: 2
-    - key: "trino_writes"
-      limit: 2
-    - key: "s3_writes"
-      limit: 3
-    - key: "data_processing"
-      limit: 4
+  runs:
+    max_concurrent_runs: 1  # Maximum concurrent job runs across the instance
+    tag_concurrency_limits:
+      # Database operations
+      - key: "trino_extract"
+        limit: 2  # Max concurrent Trino extract operations
+      - key: "trino_load"
+        limit: 2  # Max concurrent Trino load operations
+      - key: "trino_insert_select"
+        limit: 1  # Max concurrent Trino insert/select operations
+      - key: "snowflake_extract"
+        limit: 2  # Max concurrent Snowflake extract operations
+      - key: "snowflake_load"
+        limit: 2  # Max concurrent Snowflake load operations
 
+      # S3 operations
+      - key: "s3_extract"
+        limit: 2  # Max concurrent S3 extract operations
+      - key: "dataframe_to_s3"
+        limit: 2  # Max concurrent S3 upload operations
+
+      # Processing operations
+      - key: "duckdb_sql"
+        limit: 4  # Max concurrent DuckDB operations
+      - key: "batch_fan_in"
+        limit: 2  # Max concurrent batch fan-in operations
+```
+
+#### Pipeline-Level Concurrency
+
+Control concurrency within individual pipelines:
+
+```yaml
 # Job-level concurrency (max concurrent ops in this job)
 job_concurrency: 3
 
@@ -510,19 +604,33 @@ job_concurrency: 3
 steps:
   - name: extract
     executor: trino_extract
-    concurrency_key: "trino_reads"  # Limits concurrent Trino reads
+    concurrency_key: "trino_extract"  # Matches dagster.yaml tag limit
     config: ...
 
   - name: load
     executor: trino_load
-    concurrency_key: "trino_writes"  # Limits concurrent Trino writes
+    concurrency_key: "trino_load"  # Matches dagster.yaml tag limit
     config: ...
 
   - name: process
     executor: duckdb_sql
-    concurrency_key: "data_processing"  # Limits concurrent data processing
+    concurrency_key: "duckdb_sql"  # Matches dagster.yaml tag limit
     config: ...
 ```
+
+#### How Concurrency Works
+
+1. **Instance Level**: `tag_concurrency_limits` in `dagster.yaml` set global limits for operation types
+2. **Pipeline Level**: `concurrency_key` in pipeline steps tags operations for concurrency control
+3. **Job Level**: `job_concurrency` limits concurrent operations within a single job run
+4. **Matching**: Operations with matching `concurrency_key` values respect the corresponding `tag_concurrency_limits`
+
+#### Best Practices
+
+- **Resource-Based Limits**: Set limits based on database connections, API rate limits, or compute resources
+- **Conservative Defaults**: Start with lower limits and increase based on system capacity
+- **Monitor Usage**: Use Dagster UI to monitor concurrency utilization and adjust limits as needed
+- **Legacy Compatibility**: Old concurrency keys are maintained for backward compatibility during transition
 
 ### Step Dependencies
 
@@ -937,68 +1045,25 @@ done
 
 ## Data Setup
 
-### Deploy Snowflake Emulator
+### External Dependencies Setup
 
-For detailed instructions on deploying and using the [nnnkkk7/snowflake-emulator](https://github.com/nnnkkk7/snowflake-emulator), see [snowflake.md](snowflake.md).
+This project requires several external services to be running:
 
-#### Quick Start
+#### Kubernetes Cluster
+- **Setup**: See [`k8s.md`](k8s.md) for instructions on creating the local Kind cluster
+- **Repository**: [danielnuriyev/pulumi-trino](https://github.com/danielnuriyev/pulumi-trino)
 
-```bash
-# 1. Clone and build the emulator
-cd /Users/danielnuriyev/projects
-git clone https://github.com/nnnkkk7/snowflake-emulator.git
-cd snowflake-emulator
-docker build -t snowflake-emulator:latest .
+#### Trino
+- **Setup**: See [pulumi-trino repository](https://github.com/danielnuriyev/pulumi-trino) for Trino deployment
+- **Repository**: [danielnuriyev/pulumi-trino](https://github.com/danielnuriyev/pulumi-trino)
 
-# 2. Load image into Kind cluster
-kind load docker-image snowflake-emulator:latest --name local
+#### Snowflake Emulator
+- **Setup**: See [pulumi-snowflake-emulator repository](https://github.com/danielnuriyev/pulumi-snowflake-emulator) for Snowflake emulator deployment
+- **Repository**: [danielnuriyev/pulumi-snowflake-emulator](https://github.com/danielnuriyev/pulumi-snowflake-emulator)
 
-# 3. Deploy to Kubernetes
-kubectl apply -f - <<EOF
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: snowflake-emulator
-  namespace: trino
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: snowflake-emulator
-  template:
-    metadata:
-      labels:
-        app: snowflake-emulator
-    spec:
-      containers:
-      - name: snowflake-emulator
-        image: snowflake-emulator:latest
-        imagePullPolicy: IfNotPresent
-        ports:
-        - containerPort: 8080
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: snowflake-emulator
-  namespace: trino
-spec:
-  selector:
-    app: snowflake-emulator
-  ports:
-  - port: 8081
-    targetPort: 8080
-  type: ClusterIP
-EOF
-
-# 4. Port-forward for local access
-kubectl port-forward svc/snowflake-emulator -n trino 8088:8081 --context kind-local &
-
-# 5. Populate test data
-uv run python scripts/populate_snowflake.py
-```
-
-**Note:** We build and load the image locally to avoid registry authentication issues. Port `8081` is used for the service to avoid conflicts with Trino's port `8080`. Local port `8088` is used for port-forwarding.
+#### Dagster
+- **Setup**: See [pulumi-dagster repository](https://github.com/danielnuriyev/pulumi-dagster) for Dagster deployment
+- **Repository**: [danielnuriyev/pulumi-dagster](https://github.com/danielnuriyev/pulumi-dagster)
 
 ### Populate Test Data
 
@@ -1018,7 +1083,6 @@ This creates the `lakehouse.test.test_a` table with 100 records containing IDs a
 #### Snowflake
 ```bash
 # Populate test_a table with 100 records (requires Snowflake emulator/server to be running)
-# Note: Official Snowflake emulator not currently available - see deployment section above
 uv run python scripts/populate_snowflake.py
 
 # With custom connection settings
@@ -1026,8 +1090,6 @@ uv run python scripts/populate_snowflake.py --host localhost --port 8088 --user 
 ```
 
 This creates the `SNOWFLAKE.PUBLIC.test_a` table with 100 records containing IDs and timestamps.
-
-**Current Status:** The official Snowflake emulator image is not available. Use LocalStack or alternative testing approaches as documented above.
 
 ## Testing
 
@@ -1144,26 +1206,6 @@ uv run pytest tests/integration/test_all_pipelines_local.py -v -s -m integration
 uv run pytest tests/integration/test_all_pipelines_k8s.py -v -s -m integration
 ```
 
-**Environment variables:**
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DAGSTER_URL` | `http://localhost:3000` | Dagster webserver URL |
-| `TRINO_HOST` | `localhost` | Trino host |
-| `TRINO_PORT` | `8080` | Trino port |
-| `TRINO_CATALOG` | `lakehouse` | Trino catalog |
-| `TRINO_SCHEMA` | `test` | Trino schema |
-| `SNOWFLAKE_HOST` | `localhost` | Snowflake emulator host |
-| `SNOWFLAKE_PORT` | `8088` | Snowflake emulator port |
-| `SNOWFLAKE_USER` | `snowflake` | Snowflake user |
-| `SNOWFLAKE_PASSWORD` | `snowflake` | Snowflake password |
-| `SNOWFLAKE_DATABASE` | `SNOWFLAKE` | Snowflake database |
-| `SNOWFLAKE_SCHEMA` | `PUBLIC` | Snowflake schema |
-| `SNOWFLAKE_WAREHOUSE` | `COMPUTE_WH` | Snowflake warehouse |
-| `S3_ENDPOINT` | `http://localhost:30900` | MinIO/S3 endpoint |
-| `S3_ACCESS_KEY` | `admin` | S3 access key |
-| `S3_SECRET_KEY` | (none) | S3 secret key |
-| `KIND_CLUSTER` | `local` | Kind cluster name for deployment |
 
 ## Related Repositories
 
