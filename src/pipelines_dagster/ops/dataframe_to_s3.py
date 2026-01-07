@@ -34,13 +34,13 @@ def dataframe_to_s3_op(context: OpExecutionContext, config: dict, df: pd.DataFra
     s3_secret_key = os.environ.get("S3_SECRET_KEY", "")
 
     # Upload to S3/MinIO with retry logic
-    context.log.info(f"Uploading DataFrame ({len(df)} rows) to S3: {config['s3_endpoint']}/{config['s3_bucket']}/{config['s3_key']}")
+    context.log.info(f"Uploading DataFrame ({len(df)} rows) to S3: {config['endpoint']}/{config['bucket']}/{config['key']}")
 
     def create_s3_client():
         return boto3.client(
             "s3",
-            endpoint_url=config["s3_endpoint"],
-            aws_access_key_id=config["s3_access_key"],
+            endpoint_url=config["endpoint"],
+            aws_access_key_id=config["access_key"],
             aws_secret_access_key=s3_secret_key,
             config=BotoConfig(signature_version="s3v4"),
         )
@@ -48,8 +48,8 @@ def dataframe_to_s3_op(context: OpExecutionContext, config: dict, df: pd.DataFra
     def upload_to_s3():
         s3_client = create_s3_client()
         s3_client.put_object(
-            Bucket=config["s3_bucket"],
-            Key=config["s3_key"],
+            Bucket=config["bucket"],
+            Key=config["key"],
             Body=csv_content.encode("utf-8"),
             ContentType="text/csv",
         )
@@ -66,7 +66,7 @@ def dataframe_to_s3_op(context: OpExecutionContext, config: dict, df: pd.DataFra
             raise
         raise
 
-    context.log.info(f"Uploaded DataFrame to s3://{config['s3_bucket']}/{config['s3_key']}")
+    context.log.info(f"Uploaded DataFrame to s3://{config['bucket']}/{config['key']}")
 
     # Return success indicator for asset materialization
-    return f"s3://{config['s3_bucket']}/{config['s3_key']}"
+    return f"s3://{config['bucket']}/{config['key']}"

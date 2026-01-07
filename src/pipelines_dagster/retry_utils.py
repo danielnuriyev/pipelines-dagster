@@ -1,7 +1,8 @@
 """Retry utilities for external service connections."""
 
+import re
 import time
-from typing import Any, Callable, Type
+from typing import Any, Callable, Type, Union
 
 import trino
 import snowflake.connector
@@ -25,6 +26,55 @@ class RetryConfig:
         self.max_delay = max_delay
         self.backoff_factor = backoff_factor
         self.jitter = jitter
+
+
+def parse_time_with_units(time_str: Union[str, float, int]) -> float:
+    """
+    Parse time string with units (e.g., "1s", "2m", "3h", "4d", "5w") into seconds.
+
+    Args:
+        time_str: Time value as string with units or numeric value
+
+    Returns:
+        Time in seconds as float
+
+    Examples:
+        "1s" -> 1.0
+        "2m" -> 120.0
+        "3h" -> 10800.0
+        "4d" -> 345600.0
+        "5w" -> 3024000.0
+        60 -> 60.0
+        60.5 -> 60.5
+    """
+    if isinstance(time_str, (int, float)):
+        return float(time_str)
+
+    if not isinstance(time_str, str):
+        raise ValueError(f"Invalid time format: {time_str}")
+
+    # Match pattern like "1s", "2.5m", "3h", etc.
+    match = re.match(r'^(\d+(?:\.\d+)?)\s*([smhdw]?)$', time_str.strip().lower())
+    if not match:
+        raise ValueError(f"Invalid time format: {time_str}. Expected format: <number><unit> where unit is s/m/h/d/w")
+
+    value, unit = match.groups()
+    value = float(value)
+
+    # Unit multipliers (in seconds)
+    multipliers = {
+        's': 1,           # seconds
+        'm': 60,          # minutes
+        'h': 3600,        # hours
+        'd': 86400,       # days
+        'w': 604800,      # weeks
+        '': 1             # no unit = seconds
+    }
+
+    if unit not in multipliers:
+        raise ValueError(f"Unknown time unit: {unit}. Supported units: s, m, h, d, w")
+
+    return value * multipliers[unit]
 
 
 def retry_with_backoff(
@@ -173,8 +223,8 @@ def get_retry_config_from_yaml(yaml_config: dict, service_type: str = "trino") -
 
     return RetryConfig(
         max_attempts=retry_config.get("max_attempts", defaults.max_attempts),
-        base_delay=retry_config.get("base_delay", defaults.base_delay),
-        max_delay=retry_config.get("max_delay", defaults.max_delay),
+        base_delay=parse_time_with_units(retry_config.get("base_delay", defaults.base_delay)),
+        max_delay=parse_time_with_units(retry_config.get("max_delay", defaults.max_delay)),
         backoff_factor=retry_config.get("backoff_factor", defaults.backoff_factor),
         jitter=retry_config.get("jitter", defaults.jitter)
     )

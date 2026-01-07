@@ -144,9 +144,9 @@ steps:
   - name: upload
     executor: dataframe_to_s3
     config:
-      s3_endpoint: http://{{ minio.host }}:{{ minio.port }}
-      s3_bucket: {{ minio.bucket }}
-      s3_access_key: {{ minio.access_key }}
+      endpoint: http://{{ minio.host }}:{{ minio.port }}
+      bucket: {{ minio.bucket }}
+      access_key: {{ minio.access_key }}
 ```
 
 **Template Context Available:**
@@ -215,7 +215,7 @@ job_concurrency: 4  # Default: unlimited, set to limit parallel execution
 # Job retry configuration (optional)
 job_retry:
   max_attempts: 3          # Maximum retry attempts (default: 3)
-  max_delay: 3600          # Maximum delay cap in seconds (default: 3600)
+  max_delay: 1h            # Maximum delay cap (default: 1h, supports: s/m/h/d/w)
 
 # Pipeline steps (execute in dependency order)
 steps:
@@ -232,11 +232,105 @@ steps:
       # Other executor-specific configuration
       retry:                        # Optional: step-level retry configuration
         max_attempts: 3
-        base_delay: 1.0
-        max_delay: 60.0
+        base_delay: 1s             # Initial delay (supports: s/m/h/d/w)
+        max_delay: 1m              # Maximum delay cap (supports: s/m/h/d/w)
 
 # Optional: Schedule (cron expression)
 schedule: "* * * * *"  # Run every minute
+```
+
+### Complete YAML Configuration Reference
+
+#### Pipeline-Level Configuration
+
+| Option | Type | Required | Description |
+|--------|------|----------|-------------|
+| `asset_key` | string[] | ✅ | Asset key this pipeline produces (e.g., `["workspace", "schema", "table"]`) |
+| `asset_keys` | string[][] | ❌ | Multiple asset keys for parallel targets |
+| `depends_on` | string[][] | ❌ | Asset keys this pipeline depends on |
+| `job_concurrency` | number | ❌ | Max concurrent operations in this job (default: unlimited) |
+| `job_retry` | object | ❌ | Job-level retry configuration |
+| `schedule` | string | ❌ | Cron expression for scheduled runs |
+
+#### Job Retry Configuration
+
+```yaml
+job_retry:
+  max_attempts: 3          # Maximum retry attempts (default: 3)
+  max_delay: 1h            # Maximum delay cap with time units (default: 1h)
+```
+
+#### Step-Level Configuration
+
+| Option | Type | Required | Description |
+|--------|------|----------|-------------|
+| `name` | string | ✅ | Unique step name within pipeline |
+| `executor` | string | ✅ | Executor function to run (see Available Executors) |
+| `inputs` | string[] | ❌ | Data inputs from previous steps |
+| `outputs` | string[] | ❌ | Data outputs for next steps |
+| `depends_on` | string[] | ❌ | Explicit step dependencies by name |
+| `concurrency_key` | string | ❌ | Concurrency limit key (matches executor name) |
+| `config` | object | ✅ | Executor-specific configuration |
+
+#### Step Config Options
+
+**SQL Configuration (for extract/load operations):**
+```yaml
+config:
+  # SQL can be specified inline or from file
+  sql_query: SELECT * FROM table  # Inline SQL (supports multi-line YAML)
+  sql_file: sql/my_query.sql      # SQL from file (relative to pipeline directory)
+
+  # OR for SELECT queries:
+  select_query: SELECT * FROM table  # Alternative field name
+```
+
+**Time Configuration (for retry):**
+```yaml
+config:
+  retry:
+    max_attempts: 3
+    base_delay: 1s    # Initial delay (supports: s/m/h/d/w)
+    max_delay: 1m     # Maximum delay (supports: s/m/h/d/w)
+    backoff_factor: 2.0
+    jitter: true
+```
+
+**Database Connection (Trino):**
+```yaml
+config:
+  host: trino-host.com
+  port: 8080
+  user: username
+  # ... additional connection params
+```
+
+**Database Connection (Snowflake):**
+```yaml
+config:
+  account: account.region
+  user: username
+  password: password
+  warehouse: warehouse_name
+  database: database_name
+  schema: schema_name
+```
+
+**S3 Configuration:**
+```yaml
+config:
+  endpoint: http://minio-host:9000
+  bucket: bucket_name
+  key: path/to/file.csv
+  access_key: access_key
+  # s3_secret_key from environment variable
+```
+
+**Batching Configuration:**
+```yaml
+config:
+  batch_size: 1000    # Process in batches of 1000
+  pk: id             # Primary key column for batching
 ```
 
 ### Retry Configuration
@@ -251,8 +345,8 @@ steps:
       # ... other config ...
       retry:
         max_attempts: 5      # Number of retry attempts (default: 3)
-        base_delay: 3.0      # Initial delay in seconds (default: 2.0 for Trino, 1.0 for S3)
-        max_delay: 60.0      # Maximum delay cap in seconds (default: 30.0 for Trino, 20.0 for S3)
+        base_delay: 3s       # Initial delay (default: 2s for Trino, 1s for S3, supports: s/m/h/d/w)
+        max_delay: 1m        # Maximum delay cap (default: 30s for Trino, 20s for S3, supports: s/m/h/d/w)
         backoff_factor: 2.0  # Exponential backoff multiplier (default: 2.0)
         jitter: true         # Add random jitter to prevent thundering herd (default: true)
 ```
@@ -260,6 +354,93 @@ steps:
 **Defaults:**
 - **Trino operations**: 3 retries, 2s base delay, 30s max delay
 - **S3 operations**: 3 retries, 1s base delay, 20s max delay
+
+**Time Format:**
+- Supports units: `s` (seconds), `m` (minutes), `h` (hours), `d` (days), `w` (weeks)
+- Examples: `30s`, `5m`, `1h`, `2d`, `1w`
+
+### YAML Configuration Best Practices
+
+#### 1. Use Central Configuration
+Store connection details in `pipelines/config.yaml` and reference via Jinja2:
+
+```yaml
+# config.yaml
+trino:
+  host: trino-cluster.company.com
+  catalog: analytics
+  schema: prod
+
+# pipeline.yaml
+config:
+  host: {{ trino.host }}
+  catalog: {{ trino.catalog }}
+  schema: {{ trino.schema }}
+```
+
+#### 2. Organize Related Files
+Keep pipeline YAML and associated SQL files together:
+
+```
+pipelines/my_pipeline/
+├── my_pipeline.yaml
+├── extract_users.sql
+├── transform_data.sql
+└── load_results.sql
+```
+
+#### 3. Use Descriptive Names
+Choose clear, descriptive names for assets and steps:
+
+```yaml
+asset_key: ["analytics", "prod", "customer_summary_daily"]
+steps:
+  - name: extract_customer_data
+  - name: calculate_summary_metrics
+  - name: load_summary_table
+```
+
+#### 4. Set Appropriate Concurrency
+Configure concurrency limits based on resource constraints:
+
+```yaml
+# Limit concurrent database operations
+concurrency_key: "database_reads"
+
+# Job-level concurrency for complex pipelines
+job_concurrency: 3
+```
+
+#### 5. Configure Retries Thoughtfully
+Set retry parameters based on operation characteristics:
+
+```yaml
+# Fast operations
+retry:
+  base_delay: 1s
+  max_delay: 30s
+
+# Slow operations
+retry:
+  base_delay: 30s
+  max_delay: 5m
+```
+
+#### 6. Use Relative SQL File Paths
+SQL files are resolved relative to the pipeline directory:
+
+```yaml
+config:
+  sql_file: sql/extract_data.sql  # Relative to pipeline directory
+```
+
+#### 7. Document Complex Configurations
+Add comments for non-obvious configurations:
+
+```yaml
+job_concurrency: 2  # Limit due to memory constraints
+concurrency_key: "gpu_operations"  # GPU-accelerated processing
+```
 
 **Retryable errors:**
 - Connection issues and timeouts
@@ -379,6 +560,8 @@ steps:
 - **`snowflake_insert_select`**: Execute SQL queries in Snowflake, optionally INSERT...SELECT into target tables
 - **`trino_extract`**: Extract data from Trino into pandas DataFrame (supports batching)
 - **`trino_load`**: Load pandas DataFrame into Trino table
+- **`snowflake_extract`**: Extract data from Snowflake into pandas DataFrame (supports batching)
+- **`snowflake_load`**: Load pandas DataFrame into Snowflake table
 - **`dataframe_to_s3`**: Upload pandas DataFrame to S3 as CSV
 
     ```yaml
@@ -388,10 +571,10 @@ steps:
       inputs: ["df"]
       outputs: ["s3_result"]
       config:
-        s3_endpoint: http://minio-cluster.svc.cluster.local:9000
-        s3_bucket: warehouse
-        s3_key: exports/my_data.csv
-        s3_access_key: admin
+        endpoint: http://minio-cluster.svc.cluster.local:9000
+        bucket: warehouse
+        key: exports/my_data.csv
+        access_key: admin
         # s3_secret_key provided via environment variable
     ```
 - **`s3_extract`**: Download CSV from S3 and return as DataFrame
@@ -849,6 +1032,63 @@ This creates the `SNOWFLAKE.PUBLIC.test_a` table with 100 records containing IDs
 ## Testing
 
 ### Run Integration Tests
+
+The project includes multiple ways to run integration tests depending on your setup:
+
+#### Quick Start (Local Development)
+
+For local development with a running Dagster instance:
+
+```bash
+# Run all test pipelines (requires local Dagster server)
+uv run pytest tests/integration/test_all_pipelines_local.py -v -s -m integration
+
+# Run specific pipeline test
+uv run pytest tests/integration/test_full_pipeline.py -v -s -m integration
+```
+
+#### Full Integration Testing
+
+For complete end-to-end testing with Kubernetes deployment:
+
+```bash
+# Run all pipelines on Kubernetes Dagster
+uv run pytest tests/integration/test_all_pipelines_k8s.py -v -s -m integration
+
+# Run full pipeline chain test
+uv run pytest tests/integration/test_full_pipeline.py -v -s -m integration
+```
+
+### Available Pipeline Examples
+
+The `pipelines/` directory contains example pipelines demonstrating different patterns:
+
+#### Trino Pipelines (`pipelines/trino/`)
+
+| Pipeline | Description | Demonstrates |
+|----------|-------------|--------------|
+| `test_trino_trino` | Extract → Load (Trino → Trino) | Basic ETL, single-step pipeline |
+| `test_trino_s3` | Extract → S3 Upload | Data export to S3 |
+| `test_trino_multiple` | Multi-step Trino operations | Complex SQL workflows |
+| `test_trino_insert_select` | SQL execution with targets | INSERT SELECT operations |
+| `test_trino_batching_trino` | Large dataset batching | Memory-efficient processing |
+| `test_trino_duck_trino` | DuckDB + Trino integration | Multi-engine processing |
+| `test_trino_duck_targets` | Parallel targets + S3 export | Complex workflows |
+| `test_trino_duck_fanin_trino` | Batch processing + fan-in | Parallel batch processing |
+| `test_trino_targets` | Multiple parallel targets | Multi-asset pipelines |
+
+#### S3 Pipelines (`pipelines/s3/`)
+
+| Pipeline | Description | Demonstrates |
+|----------|-------------|--------------|
+| `test_s3_trino` | S3 CSV → Trino table | Data import from S3 |
+
+#### Snowflake Pipelines (`pipelines/snowflake/`)
+
+| Pipeline | Description | Demonstrates |
+|----------|-------------|--------------|
+| `test_snowflake_snowflake` | Extract → Load (Snowflake → Snowflake) | Basic ETL with Snowflake |
+| `test_snowflake_s3` | Extract → S3 Upload | Snowflake data export |
 
 ### Integration Tests
 

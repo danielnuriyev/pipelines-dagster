@@ -21,20 +21,20 @@ def s3_extract_op(context: OpExecutionContext, config: dict) -> pd.DataFrame:
     s3_secret_key = os.environ.get("S3_SECRET_KEY", "")
 
     # Download CSV from S3 with retry logic
-    context.log.info(f"Downloading from S3: {config['s3_endpoint']}/{config['s3_bucket']}/{config['s3_key']}")
+    context.log.info(f"Downloading from S3: {config['endpoint']}/{config['bucket']}/{config['key']}")
 
     def create_s3_client():
         return boto3.client(
             "s3",
-            endpoint_url=config["s3_endpoint"],
-            aws_access_key_id=config["s3_access_key"],
+            endpoint_url=config["endpoint"],
+            aws_access_key_id=config["access_key"],
             aws_secret_access_key=s3_secret_key,
             config=BotoConfig(signature_version="s3v4"),
         )
 
     def download_from_s3():
         s3_client = create_s3_client()
-        return s3_client.get_object(Bucket=config["s3_bucket"], Key=config["s3_key"])
+        return s3_client.get_object(Bucket=config["bucket"], Key=config["key"])
 
     retry_config = get_retry_config_from_yaml(config, "s3")
     try:

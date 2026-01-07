@@ -13,6 +13,8 @@ from dagster import (
     SensorDefinition,
 )
 
+from pipelines_dagster.retry_utils import parse_time_with_units
+
 
 def detect_failure_reason(context: RunFailureSensorContext) -> str:
     """
@@ -120,9 +122,9 @@ def create_job_retry_sensor(
 
         # Determine retry strategy based on failure type
         next_attempt = current_attempt + 1
-        base_delay = retry_config.get("base_delay", 60)
+        base_delay = parse_time_with_units(retry_config.get("base_delay", 60))
         backoff_factor = retry_config.get("backoff_factor", 2.0)
-        max_delay = retry_config.get("max_delay", 3600)
+        max_delay = parse_time_with_units(retry_config.get("max_delay", 3600))
 
         delay = calculate_retry_delay(next_attempt - 1, base_delay, backoff_factor, max_delay)
 

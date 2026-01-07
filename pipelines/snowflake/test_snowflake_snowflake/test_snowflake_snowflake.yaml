@@ -10,7 +10,7 @@ job_concurrency: 1
 # Job retry configuration
 job_retry:
   max_attempts: 3          # Maximum retry attempts
-  max_delay: 3600          # Maximum delay (1 hour)
+  max_delay: 1h            # Maximum delay (1 hour)
 
 # Pipeline steps - extract from Snowflake and load to Snowflake
 steps:
@@ -18,7 +18,7 @@ steps:
   - name: extract
     executor: snowflake_extract
     outputs: ["df"]
-    concurrency_key: "snowflake_reads"  # Limit concurrent Snowflake reads
+    concurrency_key: "snowflake_extract"  # Limit concurrent Snowflake extract operations
     config:
       account: {{ snowflake.account }}
       user: {{ snowflake.user }}
@@ -29,15 +29,15 @@ steps:
       select_query: SELECT * FROM {{ snowflake.database }}.{{ snowflake.schema }}.test_source
       retry:  # Custom retry configuration
         max_attempts: 3  # Try up to 3 times
-        base_delay: 1.0   # Wait 1s, 2s, 4s
-        max_delay: 60.0   # Cap delay at 60 seconds
+        base_delay: 1s    # Wait 1s, 2s, 4s
+        max_delay: 1m     # Cap delay at 1 minute
 
   # Step 2: Load data into Snowflake
   - name: load
     executor: snowflake_load
     inputs: ["df"]
     depends_on: ["extract"]  # Depends on extract step
-    concurrency_key: "snowflake_writes"  # Limit concurrent Snowflake writes
+    concurrency_key: "snowflake_load"  # Limit concurrent Snowflake load operations
     config:
       account: {{ snowflake.account }}
       user: {{ snowflake.user }}
@@ -45,10 +45,10 @@ steps:
       warehouse: {{ snowflake.warehouse }}
       database: {{ snowflake.database }}
       schema: {{ snowflake.schema }}
-      target_database: {{ snowflake.database }}
-      target_schema: {{ snowflake.schema }}
-      target_table: test_snowflake_snowflake
+      database: {{ snowflake.database }}
+      schema: {{ snowflake.schema }}
+      table: test_snowflake_snowflake
       retry:  # Custom retry configuration
         max_attempts: 3  # Try up to 3 times
-        base_delay: 1.0   # Wait 1s, 2s, 4s
-        max_delay: 60.0   # Cap delay at 60 seconds
+        base_delay: 1s    # Wait 1s, 2s, 4s
+        max_delay: 1m     # Cap delay at 1 minute

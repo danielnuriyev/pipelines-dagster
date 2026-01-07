@@ -10,7 +10,7 @@ job_concurrency: 1
 # Job retry configuration
 job_retry:
   max_attempts: 3          # Maximum retry attempts
-  max_delay: 3600          # Maximum delay (1 hour)
+  max_delay: 1h            # Maximum delay (1 hour)
 
 # Pipeline steps - extract from Trino, pass through DuckDB, load to Trino
 steps:
@@ -18,7 +18,7 @@ steps:
   - name: extract
     executor: trino_extract
     outputs: ["df"]
-    concurrency_key: "trino_reads"  # Limit concurrent Trino reads
+    concurrency_key: "trino_extract"  # Limit concurrent Trino extract operations
     config:
       host: {{ trino.host }}
       port: {{ trino.port }}
@@ -26,8 +26,8 @@ steps:
       select_query: SELECT * FROM {{ trino.catalog }}.{{ trino.schema }}.test_source
       retry:  # Custom retry configuration
         max_attempts: 3  # Try up to 3 times
-        base_delay: 1.0   # Wait 1s, 2s, 4s
-        max_delay: 60.0   # Cap delay at 60 seconds
+        base_delay: 1s    # Wait 1s, 2s, 4s
+        max_delay: 1m     # Cap delay at 1 minute
 
   # Step 2: Pass through DuckDB (no transformation)
   - name: duckdb_passthrough
@@ -35,7 +35,7 @@ steps:
     inputs: ["df"]
     outputs: ["processed_df"]
     depends_on: ["extract"]  # Depends on extract step
-    concurrency_key: "data_processing"  # Limit concurrent data processing
+    concurrency_key: "duckdb_sql"  # Limit concurrent DuckDB operations
     config:
       sql_query: "SELECT * FROM input_df"  # Simple passthrough query
 
@@ -44,15 +44,15 @@ steps:
     executor: trino_load
     inputs: ["processed_df"]
     depends_on: ["duckdb_passthrough"]  # Depends on duckdb step
-    concurrency_key: "trino_writes"  # Limit concurrent Trino writes
+    concurrency_key: "trino_load"  # Limit concurrent Trino load operations
     config:
       host: {{ trino.host }}
       port: {{ trino.port }}
       user: {{ trino.user }}
-      target_catalog: {{ trino.catalog }}
-      target_schema: {{ trino.schema }}
-      target_table: test_trino_duck_trino
+      catalog: {{ trino.catalog }}
+      schema: {{ trino.schema }}
+      table: test_trino_duck_trino
       retry:  # Custom retry configuration
         max_attempts: 3  # Try up to 3 times
-        base_delay: 1.0   # Wait 1s, 2s, 4s
-        max_delay: 60.0   # Cap delay at 60 seconds
+        base_delay: 1s    # Wait 1s, 2s, 4s
+        max_delay: 1m     # Cap delay at 1 minute

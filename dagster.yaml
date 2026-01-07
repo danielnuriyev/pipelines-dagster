@@ -6,9 +6,27 @@ concurrency:
   runs:
     max_concurrent_runs: 1  # Maximum concurrent job runs across the instance
     tag_concurrency_limits:
-      - key: "trino_reads"
-        limit: 1  # Max 2 concurrent Trino read operations
-      - key: "trino_writes"
-        limit: 1  # Max 2 concurrent Trino write operations
-      - key: "s3_operations"
-        limit: 1  # Max 3 concurrent S3 operations
+      # Database operations
+      - key: "trino_extract"
+        limit: 2  # Max concurrent Trino extract operations
+      - key: "trino_load"
+        limit: 2  # Max concurrent Trino load operations
+      - key: "trino_insert_select"
+        limit: 1  # Max concurrent Trino insert/select operations
+      - key: "snowflake_extract"
+        limit: 2  # Max concurrent Snowflake extract operations
+      - key: "snowflake_load"
+        limit: 2  # Max concurrent Snowflake load operations
+
+      # S3 operations
+      - key: "s3_extract"
+        limit: 2  # Max concurrent S3 extract operations
+      - key: "dataframe_to_s3"
+        limit: 2  # Max concurrent S3 upload operations
+
+      # Processing operations
+      - key: "duckdb_sql"
+        limit: 4  # Max concurrent DuckDB operations
+      - key: "batch_fan_in"
+        limit: 2  # Max concurrent batch fan-in operations
+

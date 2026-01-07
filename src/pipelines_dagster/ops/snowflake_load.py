@@ -19,9 +19,9 @@ def snowflake_load_op(context: OpExecutionContext, config: dict, df: pd.DataFram
     )
     cursor = conn.cursor()
 
-    target_database = config["target_database"]
-    target_schema = config["target_schema"]
-    target_table = config["target_table"]
+    target_database = config["database"]
+    target_schema = config["schema"]
+    target_table = config["table"]
     target_full_name = f"{target_database}.{target_schema}.{target_table}"
 
     # Check if we should recreate the table

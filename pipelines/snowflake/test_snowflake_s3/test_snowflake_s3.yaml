@@ -4,12 +4,21 @@ asset_key: ["s3", "{{ minio.bucket }}", "exports", "test_snowflake_s3"]
 # Dependencies (asset keys this depends on)
 # depends_on: []
 
+# Job-level concurrency (max concurrent ops in this job)
+job_concurrency: 1
+
+# Job retry configuration
+job_retry:
+  max_attempts: 3          # Maximum retry attempts
+  max_delay: 1h            # Maximum delay (1 hour)
+
 # Pipeline steps
 steps:
   # Step 1: Extract from Snowflake that returns dataframes
   - name: extract
     executor: snowflake_extract
     outputs: ["df"]
+    concurrency_key: "snowflake_extract"
     config:
       account: {{ snowflake.account }}
       user: {{ snowflake.user }}
@@ -24,9 +33,10 @@ steps:
     executor: dataframe_to_s3
     inputs: ["df"]
     depends_on: ["extract"]
+    concurrency_key: "dataframe_to_s3"
     config:
-      s3_endpoint: http://{{ minio.host }}:{{ minio.port }}
-      s3_bucket: {{ minio.bucket }}
-      s3_key: exports/{{ snowflake.schema }}_snowflake_s3.csv
-      s3_access_key: {{ minio.access_key }}
+      endpoint: http://{{ minio.host }}:{{ minio.port }}
+      bucket: {{ minio.bucket }}
+      key: exports/{{ snowflake.schema }}_snowflake_s3.csv
+      access_key: {{ minio.access_key }}
       # s3_secret_key is provided via environment variable S3_SECRET_KEY

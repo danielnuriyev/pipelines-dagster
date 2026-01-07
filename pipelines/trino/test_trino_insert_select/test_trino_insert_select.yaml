@@ -4,6 +4,14 @@ asset_key: ["lakehouse", "test", "test_trino_insert_select"]
 # Dependencies (asset keys this depends on) - test_source is external/source data
 # depends_on: []
 
+# Job-level concurrency (max concurrent ops in this job)
+job_concurrency: 1
+
+# Job retry configuration
+job_retry:
+  max_attempts: 3          # Maximum retry attempts
+  max_delay: 1h            # Maximum delay (1 hour)
+
 # Schedule (cron expression) - runs every minute
 # schedule: "* * * * *"
 
@@ -11,11 +19,12 @@ asset_key: ["lakehouse", "test", "test_trino_insert_select"]
 steps:
   - name: execute
     executor: trino_insert_select
+    concurrency_key: "trino_insert_select"
     config:
       host: {{ trino.host }}
       port: {{ trino.port }}
       user: {{ trino.user }}
       select_query: SELECT * FROM {{ trino.catalog }}.{{ trino.schema }}.test_source
-      target_catalog: {{ trino.catalog }}
-      target_schema: {{ trino.schema }}
-      target_table: test_trino_insert_select
+      catalog: {{ trino.catalog }}
+      schema: {{ trino.schema }}
+      table: test_trino_insert_select

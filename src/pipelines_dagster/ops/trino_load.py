@@ -16,9 +16,9 @@ def trino_load_op(context: OpExecutionContext, config: dict, df: pd.DataFrame) -
     )
     cursor = conn.cursor()
 
-    target_catalog = config["target_catalog"]
-    target_schema = config["target_schema"]
-    target_table = config["target_table"]
+    target_catalog = config["catalog"]
+    target_schema = config["schema"]
+    target_table = config["table"]
     target_full_name = f"{target_catalog}.{target_schema}.{target_table}"
 
     # Check if we should recreate the table
@@ -96,5 +96,4 @@ def trino_load_op(context: OpExecutionContext, config: dict, df: pd.DataFrame) -
     conn.close()
 
     # Return success indicator for asset materialization
-    target_full_name = f"{config['target_catalog']}.{config['target_schema']}.{config['target_table']}"
     return f"trino://{target_full_name}"

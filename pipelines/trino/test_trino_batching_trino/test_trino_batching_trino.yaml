@@ -10,7 +10,7 @@ job_concurrency: 1
 # Job retry configuration
 job_retry:
   max_attempts: 3          # Maximum retry attempts
-  max_delay: 3600          # Maximum delay (1 hour)
+  max_delay: 1h            # Maximum delay (1 hour)
 
 # Pipeline steps - three-step ETL with dependencies
 steps:
@@ -18,7 +18,7 @@ steps:
   - name: extract
     executor: trino_extract
     outputs: ["df"]
-    concurrency_key: "trino_reads"  # Limit concurrent Trino reads
+    concurrency_key: "trino_extract"  # Limit concurrent Trino extract operations
     config:
       host: {{ trino.host }}
       port: {{ trino.port }}
@@ -28,23 +28,23 @@ steps:
       pk: id
       retry:  # Custom retry configuration
         max_attempts: 3  # Try up to 5 times instead of default 3
-        base_delay: 1.0   # Wait 3s, 6s, 12s, 24s, 48s
-        max_delay: 60.0   # Cap delay at 60 seconds
+        base_delay: 1s    # Wait 1s, 2s, 4s, 8s, 16s
+        max_delay: 1m     # Cap delay at 1 minute
 
   # Step 3: Load transformed data into {{ trino.schema }}_d
   - name: load
     executor: trino_load
     inputs: ["df"]
     depends_on: ["extract"]  # Depends on transform step
-    concurrency_key: "trino_writes"  # Limit concurrent Trino writes
+    concurrency_key: "trino_load"  # Limit concurrent Trino load operations
     config:
       host: {{ trino.host }}
       port: {{ trino.port }}
       user: {{ trino.user }}
-      target_catalog: {{ trino.catalog }}
-      target_schema: {{ trino.schema }}
-      target_table: test_trino_batching_trino
+      catalog: {{ trino.catalog }}
+      schema: {{ trino.schema }}
+      table: test_trino_batching_trino
       retry:  # Custom retry configuration
         max_attempts: 3  # Try up to 5 times instead of default 3
-        base_delay: 1.0   # Wait 3s, 6s, 12s, 24s, 48s
-        max_delay: 60.0   # Cap delay at 60 seconds
+        base_delay: 1s    # Wait 1s, 2s, 4s, 8s, 16s
+        max_delay: 1m     # Cap delay at 1 minute

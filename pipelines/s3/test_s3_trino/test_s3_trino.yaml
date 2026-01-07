@@ -5,17 +5,26 @@ asset_key: ["lakehouse", "test", "test_s3_trino"]
 depends_on:
   - ["s3", "{{ minio.bucket }}", "exports", "test_trino_s3"]
 
+# Job-level concurrency (max concurrent ops in this job)
+job_concurrency: 1
+
+# Job retry configuration
+job_retry:
+  max_attempts: 3          # Maximum retry attempts
+  max_delay: 1h            # Maximum delay (1 hour)
+
 # Pipeline steps
 steps:
   # Step 1: Extract CSV data from S3 and return DataFrame
   - name: extract
     executor: s3_extract
     outputs: ["df"]
+    concurrency_key: "s3_extract"
     config:
-      s3_endpoint: http://{{ minio.host }}:{{ minio.port }}
-      s3_bucket: {{ minio.bucket }}
-      s3_key: exports/test_trino_s3.csv
-      s3_access_key: {{ minio.access_key }}
+      endpoint: http://{{ minio.host }}:{{ minio.port }}
+      bucket: {{ minio.bucket }}
+      key: exports/test_trino_s3.csv
+      access_key: {{ minio.access_key }}
       # s3_secret_key is provided via environment variable S3_SECRET_KEY
 
   # Step 2: Load DataFrame into Trino table
@@ -23,11 +32,12 @@ steps:
     executor: trino_load
     inputs: ["df"]
     depends_on: ["extract"]
+    concurrency_key: "trino_load"
     config:
       host: {{ trino.host }}
       port: {{ trino.port }}
       user: {{ trino.user }}
-      target_catalog: {{ trino.catalog }}
-      target_schema: {{ trino.schema }}
-      target_table: test_s3_trino
+      catalog: {{ trino.catalog }}
+      schema: {{ trino.schema }}
+      table: test_s3_trino
       recreate_table: true  # Drop and recreate table on each run
