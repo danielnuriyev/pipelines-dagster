@@ -151,6 +151,7 @@ def _load_yaml_with_template(file_path: Path) -> dict:
     template_context.update({
         "config": central_config,  # Make entire config available
         "trino": central_config.get("trino", {}),
+        "snowflake": central_config.get("snowflake", {}),
         "minio": central_config.get("minio", {}),
     })
 
