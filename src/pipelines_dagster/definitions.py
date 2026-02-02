@@ -46,9 +46,38 @@ from pipelines_dagster.ops.dataframe_to_s3 import dataframe_to_s3_op
 from pipelines_dagster.ops.cleanup import cleanup_sources_op
 from pipelines_dagster.sources import create_source_from_config
 from pipelines_dagster.sensors import create_job_retry_sensor
+from pipelines_dagster.ops.dataframe_to_s3 import dataframe_to_s3_op
+
+# Base directory containing pipeline YAML configurations
+# Use relative path when running locally, absolute path in Docker
+default_path = "/app/pipelines" if os.path.exists("/app/pipelines") else "pipelines"
+PIPELINES_BASE_DIR = Path(os.environ.get("PIPELINES_CONFIG_DIR", default_path))
 
 
-def resolve_step_dependencies(steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _passthrough_op(context: OpExecutionContext, config: dict, data: Any = None, **kwargs) -> Any:
+    """Simple pass-through operation that returns the input data."""
+    return data
+
+
+# Map executor names to their implementation functions
+EXECUTOR_FUNCTIONS: dict[str, Callable[[OpExecutionContext, dict], Any]] = {
+    "trino_insert_select": trino_insert_select_op,
+    "snowflake_insert_select": snowflake_insert_select_op,
+    "dataframe_to_s3": dataframe_to_s3_op,
+    "s3_extract": s3_extract_op,
+    "trino_extract": trino_extract_op,
+    "trino_load": trino_load_op,
+    "snowflake_extract": snowflake_extract_op,
+    "snowflake_load": snowflake_load_op,
+    "batch_splitter": batch_splitter_op,
+    "batch_fan_in": batch_fan_in_op,
+    "duckdb_sql": duckdb_sql_op,
+    "cleanup_sources": cleanup_sources_op,
+    "passthrough": _passthrough_op,
+}
+
+
+def _resolve_step_dependencies(steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Resolve step dependencies and return steps in execution order.
 
@@ -108,35 +137,6 @@ def resolve_step_dependencies(steps: List[Dict[str, Any]]) -> List[Dict[str, Any
         raise ValueError(f"Circular dependency detected involving steps: {remaining}")
 
     return result
-from pipelines_dagster.ops.dataframe_to_s3 import dataframe_to_s3_op
-
-# Base directory containing pipeline YAML configurations
-# Use relative path when running locally, absolute path in Docker
-default_path = "/app/pipelines" if os.path.exists("/app/pipelines") else "pipelines"
-PIPELINES_BASE_DIR = Path(os.environ.get("PIPELINES_CONFIG_DIR", default_path))
-
-
-def passthrough_op(context: OpExecutionContext, config: dict, data: Any = None, **kwargs) -> Any:
-    """Simple pass-through operation that returns the input data."""
-    return data
-
-# Map executor names to their implementation functions
-EXECUTOR_FUNCTIONS: dict[str, Callable[[OpExecutionContext, dict], Any]] = {
-    "trino_insert_select": trino_insert_select_op,
-    "snowflake_insert_select": snowflake_insert_select_op,
-    "dataframe_to_s3": dataframe_to_s3_op,
-    "s3_extract": s3_extract_op,
-    "trino_extract": trino_extract_op,
-    "trino_load": trino_load_op,
-    "snowflake_extract": snowflake_extract_op,
-    "snowflake_load": snowflake_load_op,
-    "batch_splitter": batch_splitter_op,
-    "batch_fan_in": batch_fan_in_op,
-    "duckdb_sql": duckdb_sql_op,
-    "cleanup_sources": cleanup_sources_op,
-    "passthrough": passthrough_op,
-}
-
 
 def _load_yaml_with_template(file_path: Path) -> dict:
     """Load a YAML file, processing Jinja2 templates if present."""
@@ -334,7 +334,7 @@ def _substitute_table_names_in_sql(sql_query: str, temp_mappings: dict) -> str:
     return result
 
 
-def load_pipeline_configs_from_dir(directory: Path) -> dict[str, dict]:
+def _load_pipeline_configs_from_dir(directory: Path) -> dict[str, dict]:
     """Load all pipeline configurations from YAML files (with optional Jinja2 templating)."""
     configs = {}
     if directory.exists():
@@ -368,7 +368,7 @@ def load_pipeline_configs_from_dir(directory: Path) -> dict[str, dict]:
     return configs
 
 
-def create_op_for_step(step_name: str, executor_func: Callable, step_config: dict, job_name: str, is_batching: bool = False):
+def _create_op_for_step(step_name: str, executor_func: Callable, step_config: dict, job_name: str, is_batching: bool = False):
     """Create an op for a single step based on YAML configuration.
 
     Args:
@@ -440,7 +440,7 @@ def create_op_for_step(step_name: str, executor_func: Callable, step_config: dic
     return step_op
 
 
-def make_graph_asset_from_steps(
+def _make_graph_asset_from_steps(
     job_name: str, asset_keys: list, dep_keys: set, resolved_steps: list, temp_mappings: dict = None
 ):
     """Create a graph-backed asset (or multi-asset) from pipeline steps."""
@@ -460,7 +460,7 @@ def make_graph_asset_from_steps(
         source_instance = None
         for step in resolved_steps:
             executor = step.get("executor", "")
-            if executor in ("trino_extract", "snowflake_extract", "s3_extract"):
+            if _classify_step_type(executor) == "source":
                 source_instance = create_source_from_config(executor, step.get("config", {}))
                 break
 
@@ -534,7 +534,7 @@ def make_graph_asset_from_steps(
         is_batching = step.get("config", {}).get("batch_size") is not None
         
         # Create the op for this step
-        step_op = create_op_for_step(step_name, executor_func, step, job_name, is_batching)
+        step_op = _create_op_for_step(step_name, executor_func, step, job_name, is_batching)
         
         step_ops_list.append({
             "name": step_name,
@@ -671,7 +671,7 @@ def make_graph_asset_from_steps(
     return graph_backed_asset
 
 
-def make_asset_for_pipeline(job_name: str, config: dict):
+def _make_asset_for_pipeline(job_name: str, config: dict):
     """Create asset(s) for a pipeline configuration based on its steps."""
     # Support both 'asset_key' and 'asset_keys'
     asset_keys = config.get("asset_keys")
@@ -701,19 +701,19 @@ def make_asset_for_pipeline(job_name: str, config: dict):
             step["config"]["_pipeline_dir"] = pipeline_dir
 
     # Resolve step dependencies for execution order
-    resolved_steps = resolve_step_dependencies(steps)
+    resolved_steps = _resolve_step_dependencies(steps)
 
     # Get temp table mappings for cleanup
     temp_mappings = config.get("_temp_table_mappings", {})
 
     # Multi-asset handles multiple parallel outputs as separate Dagster assets
-    return make_graph_asset_from_steps(job_name, asset_keys, dep_keys, resolved_steps, temp_mappings)
+    return _make_graph_asset_from_steps(job_name, asset_keys, dep_keys, resolved_steps, temp_mappings)
 
 
 def generate_definitions_for_workspace(workspace_name: str) -> Definitions:
     """Generate Dagster definitions for a specific workspace (subdirectory)."""
     workspace_dir = PIPELINES_BASE_DIR / workspace_name
-    configs = load_pipeline_configs_from_dir(workspace_dir)
+    configs = _load_pipeline_configs_from_dir(workspace_dir)
 
     assets = []
     jobs = []
@@ -729,7 +729,7 @@ def generate_definitions_for_workspace(workspace_name: str) -> Definitions:
                 continue
             asset_keys = [asset_key]
 
-        pipeline_asset = make_asset_for_pipeline(job_name, config)
+        pipeline_asset = _make_asset_for_pipeline(job_name, config)
         assets.append(pipeline_asset)
 
     # Create jobs for assets that have schedules
