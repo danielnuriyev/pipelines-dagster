@@ -1,8 +1,6 @@
 # pipelines-dagster
 
-Dagster pipelines deployed to Kubernetes.
-
-This repository contains user code deployments for [Dagster](https://dagster.io/), which is deployed to Kubernetes using [pulumi-dagster](https://github.com/danielnuriyev/pulumi-dagster).
+The goal is to build a flexible pipeline platform with the ability to easily add any data source, transformation, destination, custom logic for error handling and notifications as well as the ability to add custoom logic for managing dependencies among pipelines, custom logic for anomaly detection.
 
 ## Architecture
 
